@@ -137,6 +137,10 @@ KVM_NVHE_ALIAS(__hyp_bss_end);
 /* pKVM static key */
 KVM_NVHE_ALIAS(kvm_protected_mode_initialized);
 
+#ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
+KVM_NVHE_ALIAS(kvm_hyp_debug_uart_set_basep);
+#endif
+
 #endif /* CONFIG_KVM */
 
 #endif /* __ARM64_KERNEL_IMAGE_VARS_H */

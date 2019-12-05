@@ -22,6 +22,25 @@ unsigned long hyp_nr_cpus;
 #define hyp_percpu_size ((unsigned long)__per_cpu_end - \
 			 (unsigned long)__per_cpu_start)
 
+#ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
+unsigned long arm64_kvm_hyp_debug_uart_addr;
+static int create_hyp_debug_uart_mapping(void)
+{
+	phys_addr_t base = CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR;
+	unsigned long haddr;
+
+	haddr = __hyp_create_private_mapping(base, PAGE_SIZE, PAGE_HYP_DEVICE);
+	if (!haddr)
+		return -1;
+
+	arm64_kvm_hyp_debug_uart_addr = haddr;
+
+	return 0;
+}
+#else
+static int create_hyp_debug_uart_mapping(void) { return 0; }
+#endif
+
 static void *stacks_base;
 static void *vmemmap_base;
 static void *hyp_pgt_base;
@@ -125,6 +144,10 @@ static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
 		if (ret)
 			return ret;
 	}
+
+	ret = create_hyp_debug_uart_mapping();
+	if (ret)
+		return ret;
 
 	return 0;
 }
