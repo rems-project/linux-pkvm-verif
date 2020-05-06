@@ -10,9 +10,9 @@ lib-objs := clear_page.o copy_page.o memcpy.o memset.o
 lib-objs := $(addprefix ../../../lib/, $(lib-objs))
 
 obj-y := timer-sr.o sysreg-sr.o debug-sr.o switch.o tlb.o hyp-init.o host.o \
-	 hyp-main.o early_alloc.o page_alloc.o cache.o stub.o
+	 hyp-main.o early_alloc.o page_alloc.o cache.o stub.o setup.o mm.o
 obj-y += ../vgic-v3-sr.o ../aarch32.o ../vgic-v2-cpuif-proxy.o ../entry.o \
-	 ../fpsimd.o ../hyp-entry.o
+	 ../fpsimd.o ../hyp-entry.o ../pgtable.o
 obj-y += $(lib-objs)
 
 ##

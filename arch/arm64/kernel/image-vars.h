@@ -118,6 +118,26 @@ __kvm_nvhe___memset			= __kvm_nvhe___pi_memset;
 
 _kvm_nvhe___flush_dcache_area		= __kvm_nvhe___pi___flush_dcache_area;
 
+/* Hyp vector PA */
+KVM_NVHE_ALIAS(__kvm_bp_vect_base);
+
+/* Hypevisor VA size */
+KVM_NVHE_ALIAS(hyp_va_bits);
+
+/* Kernel memory sections */
+KVM_NVHE_ALIAS(__start_rodata);
+KVM_NVHE_ALIAS(__end_rodata);
+KVM_NVHE_ALIAS(__bss_start);
+KVM_NVHE_ALIAS(__bss_stop);
+
+/* Hyp memory sections */
+KVM_NVHE_ALIAS(__hyp_idmap_text_start);
+KVM_NVHE_ALIAS(__hyp_idmap_text_end);
+KVM_NVHE_ALIAS(__hyp_text_start);
+KVM_NVHE_ALIAS(__hyp_text_end);
+KVM_NVHE_ALIAS(__hyp_bss_start);
+KVM_NVHE_ALIAS(__hyp_bss_end);
+
 #ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
 KVM_NVHE_ALIAS(kvm_hyp_debug_uart_set_basep);
 #endif
