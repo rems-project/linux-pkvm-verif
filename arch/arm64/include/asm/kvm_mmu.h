@@ -254,6 +254,14 @@ static inline void *kvm_get_hyp_vector(void)
 	return vect;
 }
 
+/* Returns the BP vector PA if used */
+static inline phys_addr_t kvm_get_bp_vect_pa(void)
+{
+	if (cpus_have_const_cap(ARM64_HARDEN_EL2_VECTORS))
+		return __pa_symbol(__kvm_nvhe___bp_harden_hyp_vecs);
+	return 0;
+}
+
 #define kvm_phys_to_vttbr(addr)		phys_to_ttbr(addr)
 
 static __always_inline u64 kvm_get_vttbr(struct kvm_s2_mmu *mmu)

@@ -48,7 +48,6 @@ __asm__(".arch_extension	virt");
 
 DECLARE_KVM_HYP_PER_CPU(unsigned long, kvm_hyp_vector);
 
-static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
 unsigned long kvm_arm_hyp_percpu_base[NR_CPUS];
 
 /* The VMID used in the VTTBR */
@@ -60,6 +59,7 @@ static bool vgic_present;
 
 static DEFINE_PER_CPU(unsigned char, kvm_arm_hardware_enabled);
 DEFINE_STATIC_KEY_FALSE(userspace_irqchip_in_use);
+DEFINE_STATIC_KEY_FALSE(kvm_hyp_ready);
 
 int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
 {
@@ -1276,6 +1276,14 @@ static unsigned long nvhe_percpu_order(void)
 	return size ? get_order(size) : 0;
 }
 
+extern void *__kvm_nvhe_kvm_hyp_stacks[CONFIG_NR_CPUS];
+static inline unsigned long get_stack_ptr(void)
+{
+	int cpu = smp_processor_id();
+
+	return (unsigned long)__kvm_nvhe_kvm_hyp_stacks[cpu];
+}
+
 static int kvm_map_vectors(void)
 {
 	/*
@@ -1310,10 +1318,9 @@ static int kvm_map_vectors(void)
 	return 0;
 }
 
-static void cpu_init_hyp_mode(void)
+static void cpu_init_hyp_mode(unsigned long hyp_stack_ptr)
 {
 	phys_addr_t pgd_ptr;
-	unsigned long hyp_stack_ptr;
 	unsigned long vector_ptr;
 	unsigned long tpidr_el2;
 	struct arm_smccc_res res;
@@ -1330,8 +1337,6 @@ static void cpu_init_hyp_mode(void)
 		    (unsigned long)kvm_ksym_ref(CHOOSE_NVHE_SYM(__per_cpu_start));
 
 	pgd_ptr = kvm_mmu_get_httbr();
-	hyp_stack_ptr = __this_cpu_read(kvm_arm_hyp_stack_page) + PAGE_SIZE;
-	hyp_stack_ptr = kern_hyp_va(hyp_stack_ptr);
 	vector_ptr = (unsigned long)kern_hyp_va(kvm_ksym_ref(__kvm_hyp_host_vector));
 
 	/*
@@ -1372,7 +1377,7 @@ static void cpu_hyp_reinit(void)
 	if (is_kernel_in_hyp_mode())
 		kvm_timer_init_vhe();
 	else
-		cpu_init_hyp_mode();
+		cpu_init_hyp_mode(get_stack_ptr());
 
 	kvm_arm_init_debug();
 
@@ -1519,40 +1524,75 @@ static void teardown_hyp_mode(void)
 	int cpu;
 
 	free_hyp_pgds();
-	for_each_possible_cpu(cpu) {
-		free_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
+	for_each_possible_cpu(cpu)
 		free_pages(kvm_arm_hyp_percpu_base[cpu], nvhe_percpu_order());
-	}
+	static_branch_disable(&kvm_hyp_ready);
 }
 
+static int kvm_hyp_setup(u64 base, u64 size, unsigned long stack_ptr)
+{
+	void *per_cpu_base = kvm_ksym_ref(kvm_arm_hyp_percpu_base);
+	int ret;
+
+	/* this_cpu_has_cap() wants !preemptible */
+	preempt_disable();
+
+	cpu_hyp_reset();
+	cpu_init_hyp_mode(kern_hyp_va(stack_ptr) + PAGE_SIZE);
+	ret = kvm_call_hyp_nvhe(__kvm_hyp_setup, base, kern_hyp_va(__va(base)),
+				size, kvm_get_bp_vect_pa(), num_possible_cpus(),
+				kern_hyp_va(per_cpu_base));
+
+	preempt_enable();
+
+	return ret;
+}
+
+extern phys_addr_t hyp_mem_base;
+extern phys_addr_t hyp_mem_size;
 /**
  * Inits Hyp-mode on all online CPUs
  */
 static int init_hyp_mode(void)
 {
+	void *stack_page;
 	int cpu;
 	int err = 0;
 
+	if (!hyp_mem_base) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
 	/*
-	 * Allocate Hyp PGD and setup Hyp identity mapping
+	 * Allocate temporary Hyp PGD and setup Hyp identity mapping
 	 */
 	err = kvm_mmu_init();
 	if (err)
 		goto out_err;
 
 	/*
-	 * Allocate stack pages for Hypervisor-mode
+	 * Map the Hyp reserved memory region
 	 */
-	for_each_possible_cpu(cpu) {
-		unsigned long stack_page;
+	err = create_hyp_mappings(__va(hyp_mem_base), __va(hyp_mem_base) + hyp_mem_size - 1, PAGE_HYP);
+	if (err) {
+		kvm_err("Failed to map hyp_mem: %d", err);
+		goto out_err;
+	}
 
-		stack_page = __get_free_page(GFP_KERNEL);
-		if (!stack_page) {
-			err = -ENOMEM;
-			goto out_err;
-		}
+	/*
+	 * Allocate a temporary stack page, and map it
+	 */
+	stack_page =(void *) __get_free_page(GFP_KERNEL);
+	if (!stack_page) {
+		err = -ENOMEM;
+		goto out_err;
+	}
 
-		per_cpu(kvm_arm_hyp_stack_page, cpu) = stack_page;
+	err = create_hyp_mappings(stack_page, stack_page + PAGE_SIZE, PAGE_HYP);
+	if (err) {
+		kvm_err("Cannot map hyp stack\n");
+		goto out_err;
 	}
 
 	/*
@@ -1601,8 +1641,9 @@ static int init_hyp_mode(void)
 		goto out_err;
 	}
 
+	/* XXX - why turn RW again? */
 	err = create_hyp_mappings(kvm_ksym_ref(__hyp_bss_end),
-				  kvm_ksym_ref(__bss_stop), PAGE_HYP_RO);
+				  kvm_ksym_ref(__bss_stop), PAGE_HYP);
 	if (err) {
 		kvm_err("Cannot map bss section\n");
 		goto out_err;
@@ -1612,20 +1653,6 @@ static int init_hyp_mode(void)
 	if (err) {
 		kvm_err("Cannot map vectors\n");
 		goto out_err;
-	}
-
-	/*
-	 * Map the Hyp stack pages
-	 */
-	for_each_possible_cpu(cpu) {
-		char *stack_page = (char *)per_cpu(kvm_arm_hyp_stack_page, cpu);
-		err = create_hyp_mappings(stack_page, stack_page + PAGE_SIZE,
-					  PAGE_HYP);
-
-		if (err) {
-			kvm_err("Cannot map hyp stack\n");
-			goto out_err;
-		}
 	}
 
 	/*
@@ -1642,6 +1669,24 @@ static int init_hyp_mode(void)
 			goto out_err;
 		}
 	}
+
+	/*
+	 * Jump to EL2, and do the actual hyp setup
+	 */
+	err = kvm_hyp_setup(hyp_mem_base, hyp_mem_size, (unsigned long)stack_page);
+	if (err) {
+		kvm_err("Failed to setup hyp: %d\n", err);
+		goto out_err;
+	}
+
+	/* The hyp is ready, switch to using hcalls to create hyp mappings */
+	static_branch_enable(&kvm_hyp_ready);
+
+	/* Free the temporary page tables */
+	free_hyp_pgds();
+	free_page((unsigned long)stack_page);
+
+	cpu_hyp_reset();
 
 	return 0;
 

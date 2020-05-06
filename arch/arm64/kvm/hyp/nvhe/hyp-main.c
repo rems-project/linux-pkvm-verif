@@ -6,6 +6,7 @@
 
 #include <hyp/switch.h>
 
+#include <asm/pgtable-types.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_emulate.h>
 #include <asm/kvm_host.h>
@@ -13,6 +14,8 @@
 #include <asm/kvm_mmu.h>
 
 #include <kvm/arm_hypercalls.h>
+
+#include <nvhe/mm.h>
 
 static void handle_host_hcall(unsigned long func_id,
 			      struct kvm_cpu_context *host_ctxt)
@@ -94,6 +97,28 @@ static void handle_host_hcall(unsigned long func_id,
 		__vgic_v3_restore_aprs(kern_hyp_va(cpu_if));
 		break;
 	}
+	case KVM_HOST_SMCCC_FUNC(__kvm_hyp_setup):
+		ret = __kvm_hyp_setup(
+			(phys_addr_t)	host_ctxt->regs.regs[1],
+			(void*)		host_ctxt->regs.regs[2],
+			(unsigned long)	host_ctxt->regs.regs[3],
+			(phys_addr_t)	host_ctxt->regs.regs[4],
+			(unsigned long)	host_ctxt->regs.regs[5],
+			(unsigned long*)host_ctxt->regs.regs[6]);
+		break;
+	case KVM_HOST_SMCCC_FUNC(__hyp_create_mappings):
+		ret = __hyp_create_mappings(
+			(unsigned long)	host_ctxt->regs.regs[1],
+			(unsigned long)	host_ctxt->regs.regs[2],
+			(unsigned long)	host_ctxt->regs.regs[3],
+			(unsigned long)	host_ctxt->regs.regs[4]);
+		break;
+	case KVM_HOST_SMCCC_FUNC(__hyp_create_private_mapping):
+		ret = __hyp_create_private_mapping(
+			(phys_addr_t)	host_ctxt->regs.regs[1],
+			(unsigned long)	host_ctxt->regs.regs[2],
+			(unsigned long)	host_ctxt->regs.regs[3]);
+		break;
 	default:
 		/* Invalid host HVC. */
 		host_ctxt->regs.regs[0] = SMCCC_RET_NOT_SUPPORTED;
