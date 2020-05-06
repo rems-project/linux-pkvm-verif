@@ -6,6 +6,12 @@
 
 #include <linux/types.h>
 
+#define HYP_MEMBLOCK_REGIONS 128
+struct hyp_memblock_region {
+	phys_addr_t start;
+	phys_addr_t end;
+};
+
 struct hyp_pool;
 struct hyp_page {
 	unsigned int refcount;

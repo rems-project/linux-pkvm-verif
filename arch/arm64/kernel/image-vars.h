@@ -115,6 +115,25 @@ __kvm_nvhe___memset			= __kvm_nvhe___pi_memset;
 
 _kvm_nvhe___flush_dcache_area		= __kvm_nvhe___pi___flush_dcache_area;
 
+/* Hypevisor VA size */
+KVM_NVHE_ALIAS(hyp_va_bits);
+
+/* Kernel memory sections */
+KVM_NVHE_ALIAS(__start_rodata);
+KVM_NVHE_ALIAS(__end_rodata);
+KVM_NVHE_ALIAS(__bss_start);
+KVM_NVHE_ALIAS(__bss_stop);
+
+/* Hyp memory sections */
+KVM_NVHE_ALIAS(__hyp_idmap_text_start);
+KVM_NVHE_ALIAS(__hyp_idmap_text_end);
+KVM_NVHE_ALIAS(__hyp_text_start);
+KVM_NVHE_ALIAS(__hyp_text_end);
+KVM_NVHE_ALIAS(__hyp_data_ro_after_init_start);
+KVM_NVHE_ALIAS(__hyp_data_ro_after_init_end);
+KVM_NVHE_ALIAS(__hyp_bss_start);
+KVM_NVHE_ALIAS(__hyp_bss_end);
+
 #endif /* CONFIG_KVM */
 
 #endif /* __ARM64_KERNEL_IMAGE_VARS_H */
