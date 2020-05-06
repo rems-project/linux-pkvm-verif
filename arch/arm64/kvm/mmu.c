@@ -235,6 +235,7 @@ static int __create_hyp_mappings(unsigned long start, unsigned long size,
 	int err;
 
 	if (static_branch_likely(&kvm_hyp_ready)) {
+		kvm_arch_hardware_enable(); /* XXX */
 		return kvm_call_hyp_nvhe(__hyp_create_mappings,
 					 start, size, phys, prot);
 	}
@@ -302,6 +303,7 @@ static int __create_hyp_private_mapping(phys_addr_t phys_addr, size_t size,
 
 
 	if (static_branch_likely(&kvm_hyp_ready)) {
+		kvm_arch_hardware_enable(); /* XXX */
 		base = kvm_call_hyp_nvhe(__hyp_create_private_mapping,
 					 phys_addr, size, prot);
 		if (!base)
