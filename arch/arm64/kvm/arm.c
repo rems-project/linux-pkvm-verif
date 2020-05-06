@@ -1427,7 +1427,7 @@ static void cpu_prepare_hyp_mode(int cpu)
 	kvm_flush_dcache_to_poc(params, sizeof(*params));
 }
 
-static void cpu_init_hyp_mode(void)
+static void kvm_set_hyp_vector(void)
 {
 	struct kvm_nvhe_init_params *params;
 	struct arm_smccc_res res;
@@ -1445,6 +1445,11 @@ static void cpu_init_hyp_mode(void)
 	params = this_cpu_ptr_nvhe_sym(kvm_init_params);
 	arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__kvm_hyp_init), virt_to_phys(params), &res);
 	WARN_ON(res.a0 != SMCCC_RET_SUCCESS);
+}
+
+static void cpu_init_hyp_mode(void)
+{
+	kvm_set_hyp_vector();
 
 	/*
 	 * Disabling SSBD on a non-VHE system requires us to enable SSBS
@@ -1487,7 +1492,10 @@ static void cpu_set_hyp_vector(void)
 	struct bp_hardening_data *data = this_cpu_ptr(&bp_hardening_data);
 	void *vector = hyp_spectre_vector_selector[data->slot];
 
-	*this_cpu_ptr_hyp_sym(kvm_hyp_vector) = (unsigned long)vector;
+	if (!is_protected_kvm_enabled())
+		*this_cpu_ptr_hyp_sym(kvm_hyp_vector) = (unsigned long)vector;
+	else
+		kvm_call_hyp_nvhe(__hyp_cpu_set_vector, data->slot);
 }
 
 static void cpu_hyp_reinit(void)
@@ -1495,12 +1503,13 @@ static void cpu_hyp_reinit(void)
 	kvm_init_host_cpu_context(&this_cpu_ptr_hyp_sym(kvm_host_data)->host_ctxt);
 
 	cpu_hyp_reset();
-	cpu_set_hyp_vector();
 
 	if (is_kernel_in_hyp_mode())
 		kvm_timer_init_vhe();
 	else
 		cpu_init_hyp_mode();
+
+	cpu_set_hyp_vector();
 
 	kvm_arm_init_debug();
 
@@ -1710,13 +1719,52 @@ static int copy_cpu_ftr_regs(void)
 	return 0;
 }
 
+static int kvm_hyp_enable_protection(void)
+{
+	void *per_cpu_base = kvm_ksym_ref(kvm_arm_hyp_percpu_base);
+	int ret, cpu;
+	void *addr;
+
+	if (!is_protected_kvm_enabled())
+		return 0;
+
+	if (!hyp_mem_base)
+		return -ENOMEM;
+
+	addr = phys_to_virt(hyp_mem_base);
+	ret = create_hyp_mappings(addr, addr + hyp_mem_size - 1, PAGE_HYP);
+	if (ret)
+		return ret;
+
+	preempt_disable();
+	kvm_set_hyp_vector();
+	ret = kvm_call_hyp_nvhe(__kvm_hyp_protect, hyp_mem_base, hyp_mem_size,
+				num_possible_cpus(), kern_hyp_va(per_cpu_base));
+	preempt_enable();
+	if (ret)
+		return ret;
+
+	free_hyp_pgds();
+	for_each_possible_cpu(cpu)
+		free_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
+
+	return 0;
+}
+
 /**
  * Inits Hyp-mode on all online CPUs
  */
 static int init_hyp_mode(void)
 {
 	int cpu;
-	int err = 0;
+	int err = -ENOMEM;
+
+	/*
+	 * The protected Hyp-mode cannot be initialized if the memory pool
+	 * allocation has failed.
+	 */
+	if (is_protected_kvm_enabled() && !hyp_mem_base)
+		return err;
 
 	/*
 	 * Copy the required CPU feature register in their EL2 counterpart
@@ -1849,6 +1897,12 @@ static int init_hyp_mode(void)
 	 */
 	for_each_possible_cpu(cpu)
 		cpu_prepare_hyp_mode(cpu);
+
+	err = kvm_hyp_enable_protection();
+	if (err) {
+		kvm_err("Failed to enable hyp memory protection: %d\n", err);
+		goto out_err;
+	}
 
 	return 0;
 
