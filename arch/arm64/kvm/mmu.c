@@ -351,14 +351,14 @@ out:
 }
 
 #ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
-static unsigned long arm64_kvm_hyp_debug_uart_addr;
+extern unsigned long __kvm_nvhe_arm64_kvm_hyp_debug_uart_addr;
 
 void __init kvm_hyp_debug_uart_set_basep(struct alt_instr *alt,
 					 __le32 *origptr, __le32 *updptr,
 					 int nr_inst)
 {
 	int i;
-	u64 addr = (u64)kvm_ksym_ref(&arm64_kvm_hyp_debug_uart_addr);
+	u64 addr = (u64)kvm_ksym_ref(&__kvm_nvhe_arm64_kvm_hyp_debug_uart_addr);
 
 	BUG_ON(nr_inst != 4);
 
@@ -381,7 +381,7 @@ static int create_hyp_debug_uart_mapping(void)
 
 	return __create_hyp_private_mapping(CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR,
 					    PAGE_SIZE,
-					    &arm64_kvm_hyp_debug_uart_addr,
+					    &__kvm_nvhe_arm64_kvm_hyp_debug_uart_addr,
 					    PAGE_HYP_DEVICE);
 }
 #else

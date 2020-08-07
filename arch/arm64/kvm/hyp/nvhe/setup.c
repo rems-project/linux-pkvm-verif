@@ -18,6 +18,25 @@ struct hyp_pool hpool;
 void *kvm_hyp_stacks[CONFIG_NR_CPUS];
 #define hyp_percpu_size ((unsigned long)__per_cpu_end - (unsigned long)__per_cpu_start)
 
+#ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
+unsigned long arm64_kvm_hyp_debug_uart_addr;
+static int create_hyp_debug_uart_mapping(void)
+{
+	phys_addr_t base = CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR;
+	unsigned long haddr;
+
+	haddr = hyp_create_private_mapping(base, PAGE_SIZE, PAGE_HYP_DEVICE);
+	if (!haddr)
+		return -1;
+
+	arm64_kvm_hyp_debug_uart_addr = haddr;
+
+	return 0;
+}
+#else
+static int create_hyp_debug_uart_mapping(void) { return 0; }
+#endif
+
 /* XXX - this modifies the host's bss directly */
 extern void *__kvm_bp_vect_base;
 
@@ -62,6 +81,10 @@ static int hyp_map_memory(phys_addr_t phys, void* virt, unsigned long size,
 		return err;
 
 	err = hyp_back_vmemmap_early(phys, size);
+	if (err)
+		return err;
+
+	err = create_hyp_debug_uart_mapping();
 	if (err)
 		return err;
 
