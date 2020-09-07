@@ -53,15 +53,15 @@ struct kvm_pgtable {
 
 /**
  * enum kvm_pgtable_prot - Page-table permissions and attributes.
- * @KVM_PGTABLE_PROT_R:		Read permission.
- * @KVM_PGTABLE_PROT_W:		Write permission.
  * @KVM_PGTABLE_PROT_X:		Execute permission.
+ * @KVM_PGTABLE_PROT_W:		Write permission.
+ * @KVM_PGTABLE_PROT_R:		Read permission.
  * @KVM_PGTABLE_PROT_DEVICE:	Device attributes.
  */
 enum kvm_pgtable_prot {
-	KVM_PGTABLE_PROT_R			= BIT(0),
+	KVM_PGTABLE_PROT_X			= BIT(0),
 	KVM_PGTABLE_PROT_W			= BIT(1),
-	KVM_PGTABLE_PROT_X			= BIT(2),
+	KVM_PGTABLE_PROT_R			= BIT(2),
 
 	KVM_PGTABLE_PROT_DEVICE			= BIT(3),
 };
@@ -133,7 +133,9 @@ void kvm_pgtable_hyp_destroy(struct kvm_pgtable *pgt);
  * @prot:	Permissions and attributes for the mapping.
  *
  * If device attributes are not explicitly requested in @prot, then the
- * mapping will be normal, cacheable.
+ * mapping will be normal, cacheable. Attempts to install a mapping for
+ * a virtual address that is already mapped will be rejected with an error
+ * and a WARN().
  *
  * Return: 0 on success, negative error code on failure.
  */

@@ -39,25 +39,30 @@ static unsigned long io_map_base;
  * long will also starve other vCPUs. We have to also make sure that the page
  * tables are not freed while we released the lock.
  */
-#define stage2_apply_range(kvm, addr, end, fn, resched)			\
-({									\
-	int ret;							\
-	struct kvm *__kvm = (kvm);					\
-	bool __resched = (resched);					\
-	u64 next, __addr = (addr), __end = (end);			\
-	do {								\
-		struct kvm_pgtable *pgt = __kvm->arch.mmu.pgt;		\
-		if (!pgt)						\
-			break;						\
-		next = stage2_pgd_addr_end(__kvm, __addr, __end);	\
-		ret = fn(pgt, __addr, next - __addr);			\
-		if (ret)						\
-			break;						\
-		if (__resched && next != __end)				\
-			cond_resched_lock(&__kvm->mmu_lock);		\
-	} while (__addr = next, __addr != __end);			\
-	ret;								\
-})
+static int stage2_apply_range(struct kvm *kvm, phys_addr_t addr,
+			      phys_addr_t end,
+			      int (*fn)(struct kvm_pgtable *, u64, u64),
+			      bool resched)
+{
+	int ret;
+	u64 next;
+
+	do {
+		struct kvm_pgtable *pgt = kvm->arch.mmu.pgt;
+		if (!pgt)
+			return -EINVAL;
+
+		next = stage2_pgd_addr_end(kvm, addr, end);
+		ret = fn(pgt, addr, next - addr);
+		if (ret)
+			break;
+
+		if (resched && next != end)
+			cond_resched_lock(&kvm->mmu_lock);
+	} while (addr = next, addr != end);
+
+	return ret;
+}
 
 #define stage2_apply_range_resched(kvm, addr, end, fn)			\
 	stage2_apply_range(kvm, addr, end, fn, true)
@@ -840,11 +845,11 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	bool exec_fault;
 	bool device = false;
 	unsigned long mmu_seq;
-	gfn_t gfn = fault_ipa >> PAGE_SHIFT;
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_mmu_memory_cache *memcache = &vcpu->arch.mmu_page_cache;
 	struct vm_area_struct *vma;
 	short vma_shift;
+	gfn_t gfn;
 	kvm_pfn_t pfn;
 	bool logging_active = memslot_is_logging(memslot);
 	unsigned long vma_pagesize;
@@ -883,10 +888,18 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	}
 
 	if (vma_pagesize == PMD_SIZE || vma_pagesize == PUD_SIZE)
-		gfn = (fault_ipa & huge_page_mask(hstate_vma(vma))) >> PAGE_SHIFT;
+		fault_ipa &= huge_page_mask(hstate_vma(vma));
+
+	gfn = fault_ipa >> PAGE_SHIFT;
 	mmap_read_unlock(current->mm);
 
-	if (fault_status != FSC_PERM) {
+	/*
+	 * Permission faults just need to update the existing leaf entry,
+	 * and so normally don't require allocations from the memcache. The
+	 * only exception to this is when dirty logging is enabled at runtime
+	 * and a write fault needs to collapse a block entry into a table.
+	 */
+	if (fault_status != FSC_PERM || (logging_active && write_fault)) {
 		ret = kvm_mmu_topup_memory_cache(memcache,
 						 kvm_mmu_cache_min_pages(kvm));
 		if (ret)
@@ -957,7 +970,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	else if (cpus_have_const_cap(ARM64_HAS_CACHE_DIC))
 		prot |= KVM_PGTABLE_PROT_X;
 
-	if (fault_status == FSC_PERM) {
+	if (fault_status == FSC_PERM && !(logging_active && writable)) {
 		ret = kvm_pgtable_stage2_relax_perms(pgt, fault_ipa, prot);
 	} else {
 		ret = kvm_pgtable_stage2_map(pgt, fault_ipa, vma_pagesize,

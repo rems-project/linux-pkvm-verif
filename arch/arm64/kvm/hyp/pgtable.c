@@ -55,7 +55,8 @@ struct kvm_pgtable_walk_data {
 
 static u64 kvm_granule_shift(u32 level)
 {
-	return (KVM_PGTABLE_MAX_LEVELS - level) * (PAGE_SHIFT - 3) + 3;
+	/* Assumes KVM_PGTABLE_MAX_LEVELS is 4 */
+	return ARM64_HW_PGTABLE_LEVEL_SHIFT(level);
 }
 
 static u64 kvm_granule_size(u32 level)
@@ -78,12 +79,6 @@ static bool kvm_block_mapping_supported(u64 addr, u64 end, u64 phys, u32 level)
 		return false;
 
 	return IS_ALIGNED(addr, granule) && IS_ALIGNED(phys, granule);
-}
-
-static u32 kvm_start_level(u64 ia_bits)
-{
-	u64 levels = DIV_ROUND_UP(ia_bits - PAGE_SHIFT, PAGE_SHIFT - 3);
-	return KVM_PGTABLE_MAX_LEVELS - levels;
 }
 
 static u32 kvm_pgtable_idx(struct kvm_pgtable_walk_data *data, u32 level)
@@ -160,8 +155,8 @@ static kvm_pte_t *kvm_pte_follow(kvm_pte_t pte, struct kvm_pgtable_mm_ops *mm_op
 
 static void kvm_set_invalid_pte(kvm_pte_t *ptep)
 {
-	kvm_pte_t pte = 0;
-	WRITE_ONCE(*ptep, pte);
+	kvm_pte_t pte = *ptep;
+	WRITE_ONCE(*ptep, pte & ~KVM_PTE_VALID);
 }
 
 static void kvm_set_table_pte(kvm_pte_t *ptep, kvm_pte_t *childp,
@@ -406,12 +401,14 @@ int kvm_pgtable_hyp_map(struct kvm_pgtable *pgt, u64 addr, u64 size, u64 phys,
 int kvm_pgtable_hyp_init(struct kvm_pgtable *pgt, u32 va_bits,
 			 struct kvm_pgtable_mm_ops *mm_ops)
 {
+	u64 levels = ARM64_HW_PGTABLE_LEVELS(va_bits);
+
 	pgt->pgd = (kvm_pte_t *)mm_ops->zalloc_page(NULL);
 	if (!pgt->pgd)
 		return -ENOMEM;
 
 	pgt->ia_bits		= va_bits;
-	pgt->start_level	= kvm_start_level(va_bits);
+	pgt->start_level	= KVM_PGTABLE_MAX_LEVELS - levels;
 	pgt->mm_ops		= mm_ops;
 	pgt->mmu		= NULL;
 	return 0;
@@ -487,6 +484,7 @@ static bool stage2_map_walker_try_leaf(u64 addr, u64 end, u32 level,
 	if (kvm_set_valid_leaf_pte(ptep, phys, data->attr, level))
 		goto out;
 
+	/* There's an existing valid leaf entry, so perform break-before-make */
 	kvm_set_invalid_pte(ptep);
 	kvm_call_hyp(__kvm_tlb_flush_vmid_ipa, data->mmu, addr, level);
 	kvm_set_valid_leaf_pte(ptep, phys, data->attr, level);
@@ -529,6 +527,9 @@ static int stage2_map_walk_leaf(u64 addr, u64 end, u32 level, kvm_pte_t *ptep,
 
 	if (WARN_ON(level == KVM_PGTABLE_MAX_LEVELS - 1))
 		return -EINVAL;
+
+	if (!data->memcache)
+		return -ENOMEM;
 
 	childp = mm_ops->zalloc_page(data->memcache);
 	if (!childp)
@@ -573,6 +574,25 @@ static int stage2_map_walk_table_post(u64 addr, u64 end, u32 level,
 	return ret;
 }
 
+/*
+ * This is a little fiddly, as we use all three of the walk flags. The idea
+ * is that the TABLE_PRE callback runs for table entries on the way down,
+ * looking for table entries which we could conceivably replace with a
+ * block entry for this mapping. If it finds one, then it sets the 'anchor'
+ * field in 'struct stage2_map_data' to point at the table entry, before
+ * clearing the entry to zero and descending into the now detached table.
+ *
+ * The behaviour of the LEAF callback then depends on whether or not the
+ * anchor has been set. If not, then we're not using a block mapping higher
+ * up the table and we perform the mapping at the existing leaves instead.
+ * If, on the other hand, the anchor _is_ set, then we drop references to
+ * all valid leaves so that the pages beneath the anchor can be freed.
+ *
+ * Finally, the TABLE_POST callback does nothing if the anchor has not
+ * been set, but otherwise frees the page-table pages while walking back up
+ * the page-table, installing the block entry when it revisits the anchor
+ * pointer and clearing the anchor to NULL.
+ */
 static int stage2_map_walker(u64 addr, u64 end, u32 level, kvm_pte_t *ptep,
 			     enum kvm_pgtable_walk_flags flag, void * const arg)
 {
