@@ -378,9 +378,9 @@ int kvm_set_ipa_limit(void)
 
 	kvm_ipa_limit = id_aa64mmfr0_parange_to_phys_shift(parange);
 	WARN(kvm_ipa_limit < KVM_PHYS_SHIFT,
-	     "KVM IPA limit (%d bit) is smaller than default size\n",
+	     "KVM IPA Size Limit (%d bits) is smaller than default size\n",
 	     kvm_ipa_limit);
-	kvm_info("IPA Size Limit: %dbits\n", kvm_ipa_limit);
+	kvm_info("IPA Size Limit: %d bits\n", kvm_ipa_limit);
 
 	return 0;
 }

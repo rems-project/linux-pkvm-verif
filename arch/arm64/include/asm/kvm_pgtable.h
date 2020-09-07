@@ -132,10 +132,14 @@ void kvm_pgtable_hyp_destroy(struct kvm_pgtable *pgt);
  * @phys:	Physical address of the memory to map.
  * @prot:	Permissions and attributes for the mapping.
  *
+ * The offset of @addr within a page is ignored, @size is rounded-up to
+ * the next page boundary and @phys is rounded-down to the previous page
+ * boundary.
+ *
  * If device attributes are not explicitly requested in @prot, then the
- * mapping will be normal, cacheable. Attempts to install a mapping for
- * a virtual address that is already mapped will be rejected with an error
- * and a WARN().
+ * mapping will be normal, cacheable. Attempts to install a new mapping
+ * for a virtual address that is already mapped will be rejected with an
+ * error and a WARN().
  *
  * Return: 0 on success, negative error code on failure.
  */
@@ -172,6 +176,10 @@ void kvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt);
  * @mc:		Cache of pre-allocated GFP_PGTABLE_USER memory from which to
  *		allocate page-table pages.
  *
+ * The offset of @addr within a page is ignored, @size is rounded-up to
+ * the next page boundary and @phys is rounded-down to the previous page
+ * boundary.
+ *
  * If device attributes are not explicitly requested in @prot, then the
  * mapping will be normal, cacheable.
  *
@@ -191,6 +199,9 @@ int kvm_pgtable_stage2_map(struct kvm_pgtable *pgt, u64 addr, u64 size,
  * @addr:	Intermediate physical address from which to remove the mapping.
  * @size:	Size of the mapping.
  *
+ * The offset of @addr within a page is ignored and @size is rounded-up to
+ * the next page boundary.
+ *
  * TLB invalidation is performed for each page-table entry cleared during the
  * unmapping operation and the reference count for the page-table page
  * containing the cleared entry is decremented, with unreferenced pages being
@@ -208,6 +219,9 @@ int kvm_pgtable_stage2_unmap(struct kvm_pgtable *pgt, u64 addr, u64 size);
  * @addr:	Intermediate physical address from which to write-protect,
  * @size:	Size of the range.
  *
+ * The offset of @addr within a page is ignored and @size is rounded-up to
+ * the next page boundary.
+ *
  * Note that it is the caller's responsibility to invalidate the TLB after
  * calling this function to ensure that the updated permissions are visible
  * to the CPUs.
@@ -221,6 +235,8 @@ int kvm_pgtable_stage2_wrprotect(struct kvm_pgtable *pgt, u64 addr, u64 size);
  * @pgt:	Page-table structure initialised by kvm_pgtable_stage2_init().
  * @addr:	Intermediate physical address to identify the page-table entry.
  *
+ * The offset of @addr within a page is ignored.
+ *
  * If there is a valid, leaf page-table entry used to translate @addr, then
  * set the access flag in that entry.
  *
@@ -232,6 +248,8 @@ kvm_pte_t kvm_pgtable_stage2_mkyoung(struct kvm_pgtable *pgt, u64 addr);
  * kvm_pgtable_stage2_mkold() - Clear the access flag in a page-table entry.
  * @pgt:	Page-table structure initialised by kvm_pgtable_stage2_init().
  * @addr:	Intermediate physical address to identify the page-table entry.
+ *
+ * The offset of @addr within a page is ignored.
  *
  * If there is a valid, leaf page-table entry used to translate @addr, then
  * clear the access flag in that entry.
@@ -251,6 +269,8 @@ kvm_pte_t kvm_pgtable_stage2_mkold(struct kvm_pgtable *pgt, u64 addr);
  * @addr:	Intermediate physical address to identify the page-table entry.
  * @prot:	Additional permissions to grant for the mapping.
  *
+ * The offset of @addr within a page is ignored.
+ *
  * If there is a valid, leaf page-table entry used to translate @addr, then
  * relax the permissions in that entry according to the read, write and
  * execute permissions specified by @prot. No permissions are removed, and
@@ -267,6 +287,8 @@ int kvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr,
  * @pgt:	Page-table structure initialised by kvm_pgtable_stage2_init().
  * @addr:	Intermediate physical address to identify the page-table entry.
  *
+ * The offset of @addr within a page is ignored.
+ *
  * Return: True if the page-table entry has the access flag set, false otherwise.
  */
 bool kvm_pgtable_stage2_is_young(struct kvm_pgtable *pgt, u64 addr);
@@ -279,6 +301,9 @@ bool kvm_pgtable_stage2_is_young(struct kvm_pgtable *pgt, u64 addr);
  * @addr:	Intermediate physical address from which to flush.
  * @size:	Size of the range.
  *
+ * The offset of @addr within a page is ignored and @size is rounded-up to
+ * the next page boundary.
+ *
  * Return: 0 on success, negative error code on failure.
  */
 int kvm_pgtable_stage2_flush(struct kvm_pgtable *pgt, u64 addr, u64 size);
@@ -289,6 +314,9 @@ int kvm_pgtable_stage2_flush(struct kvm_pgtable *pgt, u64 addr, u64 size);
  * @addr:	Input address for the start of the walk.
  * @size:	Size of the range to walk.
  * @walker:	Walker callback description.
+ *
+ * The offset of @addr within a page is ignored and @size is rounded-up to
+ * the next page boundary.
  *
  * The walker will walk the page-table entries corresponding to the input
  * address range specified, visiting entries according to the walker flags.

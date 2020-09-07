@@ -863,6 +863,9 @@ int kvm_pgtable_stage2_init(struct kvm_pgtable *pgt, struct kvm *kvm,
 	pgt->start_level	= start_level;
 	pgt->mm_ops		= mm_ops;
 	pgt->mmu		= &kvm->arch.mmu;
+
+	/* Ensure zeroed PGD pages are visible to the hardware walker */
+	dsb(ishst);
 	return 0;
 }
 
