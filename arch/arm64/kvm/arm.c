@@ -34,6 +34,7 @@
 #include <asm/virt.h>
 #include <asm/kvm_arm.h>
 #include <asm/kvm_asm.h>
+#include <asm/kvm_cpufeature.h>
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_emulate.h>
 #include <asm/sections.h>
@@ -1693,6 +1694,29 @@ static void teardown_hyp_mode(void)
 	}
 }
 
+#undef KVM_HYP_CPU_FTR_REG
+#define KVM_HYP_CPU_FTR_REG(id, name) \
+	{ .sys_id = id, .dst = (struct arm64_ftr_reg *)&kvm_nvhe_sym(name) },
+static const struct __ftr_reg_copy_entry {
+	u32			sys_id;
+	struct arm64_ftr_reg	*dst;
+} hyp_ftr_regs[] = {
+	#include <asm/kvm_cpufeature.h>
+};
+
+static int copy_cpu_ftr_regs(void)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(hyp_ftr_regs); i++) {
+		ret = copy_ftr_reg(hyp_ftr_regs[i].sys_id, hyp_ftr_regs[i].dst);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 /**
  * Inits Hyp-mode on all online CPUs
  */
@@ -1700,6 +1724,13 @@ static int init_hyp_mode(void)
 {
 	int cpu;
 	int err = 0;
+
+	/*
+	 * Copy the required CPU feature register in their EL2 counterpart
+	 */
+	err = copy_cpu_ftr_regs();
+	if (err)
+		return err;
 
 	/*
 	 * Allocate Hyp PGD and setup Hyp identity mapping
