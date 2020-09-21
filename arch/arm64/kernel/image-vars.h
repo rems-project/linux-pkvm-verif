@@ -92,6 +92,9 @@ KVM_NVHE_ALIAS(arm64_const_caps_ready);
 KVM_NVHE_ALIAS(cpu_hwcap_keys);
 KVM_NVHE_ALIAS(cpu_hwcaps);
 
+/* Kernel symbols needed for CPU features checks. */
+KVM_NVHE_ALIAS(arm64_ftr_reg_ctrel0);
+
 /* Static keys which are set if a vGIC trap should be handled in hyp. */
 KVM_NVHE_ALIAS(vgic_v2_cpuif_trap);
 KVM_NVHE_ALIAS(vgic_v3_cpuif_trap);
