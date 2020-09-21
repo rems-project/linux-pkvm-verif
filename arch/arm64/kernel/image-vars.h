@@ -89,6 +89,9 @@ KVM_NVHE_ALIAS(arm64_const_caps_ready);
 KVM_NVHE_ALIAS(cpu_hwcap_keys);
 KVM_NVHE_ALIAS(cpu_hwcaps);
 
+/* Kernel symbols needed for CPU features checks. */
+KVM_NVHE_ALIAS(arm64_ftr_reg_ctrel0);
+
 /* Static keys which are set if a vGIC trap should be handled in hyp. */
 KVM_NVHE_ALIAS(vgic_v2_cpuif_trap);
 KVM_NVHE_ALIAS(vgic_v3_cpuif_trap);
@@ -112,6 +115,8 @@ __kvm_nvhe_memset			= __kvm_nvhe___pi_memset;
 __kvm_nvhe___memcpy			= __kvm_nvhe___pi_memcpy;
 __kvm_nvhe___memset			= __kvm_nvhe___pi_memset;
 #endif
+
+_kvm_nvhe___flush_dcache_area		= __kvm_nvhe___pi___flush_dcache_area;
 
 #ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
 KVM_NVHE_ALIAS(kvm_hyp_debug_uart_set_basep);
