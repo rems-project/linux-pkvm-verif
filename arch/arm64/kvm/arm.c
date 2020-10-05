@@ -49,8 +49,6 @@ __asm__(".arch_extension	virt");
 DEFINE_PER_CPU(kvm_host_data_t, kvm_host_data);
 DEFINE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
 DEFINE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
-DEFINE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
-DEFINE_PER_CPU(u64, kvm_host_pmscr_el1);
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
 
 /* The VMID used in the VTTBR */
@@ -1556,7 +1554,6 @@ static int init_hyp_mode(void)
 	for_each_possible_cpu(cpu) {
 		kvm_host_data_t *cpu_data;
 		struct kvm_vcpu *host_vcpu;
-		u64 *host_pmscr;
 		struct kvm_vcpu **running_vcpu;
 
 		cpu_data = per_cpu_ptr(&kvm_host_data, cpu);
@@ -1572,14 +1569,6 @@ static int init_hyp_mode(void)
 
 		if (err) {
 			kvm_err("Cannot map host vCPU: %d\n", err);
-			goto out_err;
-		}
-
-		host_pmscr = per_cpu_ptr(&kvm_host_pmscr_el1, cpu);
-		err = create_hyp_mappings(host_pmscr, host_pmscr + 1, PAGE_HYP);
-
-		if (err) {
-			kvm_err("Cannot map host pmscr_el1: %d\n", err);
 			goto out_err;
 		}
 

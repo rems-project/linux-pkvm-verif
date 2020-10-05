@@ -67,7 +67,7 @@ void __debug_switch_to_guest(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
 	host_dbg = host_vcpu->arch.debug_ptr;
 
 	/* Disable and flush SPE data generation */
-	__debug_save_spe(__hyp_this_cpu_ptr(kvm_host_pmscr_el1));
+	__debug_save_spe(&vcpu->arch.host_debug_state.pmscr_el1);
 	__debug_switch_to_guest_common(vcpu, host_dbg, host_ctxt);
 }
 
@@ -79,7 +79,7 @@ void __debug_switch_to_host(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
 	host_ctxt = &host_vcpu->arch.ctxt;
 	host_dbg = host_vcpu->arch.debug_ptr;
 
-	__debug_restore_spe(__hyp_this_cpu_read(kvm_host_pmscr_el1));
+	__debug_restore_spe(vcpu->arch.host_debug_state.pmscr_el1);
 	__debug_switch_to_host_common(vcpu, host_dbg, host_ctxt);
 }
 
