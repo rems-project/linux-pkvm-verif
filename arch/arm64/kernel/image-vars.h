@@ -70,6 +70,7 @@ KVM_NVHE_ALIAS(kvm_update_va_mask);
 
 /* Global kernel state accessed by nVHE hyp code. */
 KVM_NVHE_ALIAS(arm64_ssbd_callback_required);
+KVM_NVHE_ALIAS(kvm_hyp_running_vcpu);
 KVM_NVHE_ALIAS(kvm_pmu_events);
 KVM_NVHE_ALIAS(kvm_vgic_global_state);
 
