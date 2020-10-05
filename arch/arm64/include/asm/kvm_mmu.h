@@ -349,6 +349,13 @@ static __always_inline void __load_guest_stage2(struct kvm_s2_mmu *mmu)
 {
 	write_sysreg(kern_hyp_va(mmu->kvm)->arch.vtcr, vtcr_el2);
 	write_sysreg(kvm_get_vttbr(mmu), vttbr_el2);
+
+	/*
+	 * ARM errata 1165522 and 1530923 require the actual execution of the
+	 * above before we can switch to the EL1/EL0 translation regime used by
+	 * the guest.
+	 */
+	asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_SPECULATIVE_AT));
 }
 
 #endif /* __ASSEMBLY__ */

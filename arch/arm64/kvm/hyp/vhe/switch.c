@@ -126,7 +126,6 @@ static int __kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
 	 * (among other things).
 	 */
 	__activate_vm(vcpu->arch.hw_mmu);
-	asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_SPECULATIVE_AT));
 	__activate_traps(vcpu);
 
 	sysreg_restore_guest_state_vhe(guest_ctxt);
