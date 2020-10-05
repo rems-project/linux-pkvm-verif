@@ -88,26 +88,6 @@ static void __hyp_vgic_restore_state(struct kvm_vcpu *vcpu)
 	}
 }
 
-void __hyp_gic_pmr_restore(struct kvm_vcpu *vcpu)
-{
-	if (!system_uses_irq_prio_masking())
-		return;
-
-	if (vcpu->arch.ctxt.is_host) {
-		/* Returning to host will clear PSR.I, remask PMR if needed */
-		gic_write_pmr(GIC_PRIO_IRQOFF);
-	} else {
-		/*
-		 * Having IRQs masked via PMR when entering the guest means the
-		 * GIC will not signal the CPU of interrupts of lower priority,
-		 * and the only way to get out will be via guest exceptions.
-		 * Naturally, we want to avoid this.
-		 */
-		gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
-		pmr_sync();
-	}
-}
-
 static void __pmu_restore(struct kvm_vcpu *vcpu)
 {
 	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
@@ -124,6 +104,29 @@ static void __pmu_restore(struct kvm_vcpu *vcpu)
 
 	write_sysreg(clr, pmcntenclr_el0);
 	write_sysreg(set, pmcntenset_el0);
+}
+
+static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
+				       struct kvm_vcpu *vcpu)
+{
+	/*
+	 * Having IRQs masked via PMR when entering the guest means the GIC
+	 * will not signal the CPU of interrupts of lower priority, and the
+	 * only way to get out will be via guest exceptions.
+	 * Naturally, we want to avoid this.
+	 */
+	if (system_uses_irq_prio_masking()) {
+		gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
+		pmr_sync();
+	}
+}
+
+static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
+				      struct kvm_vcpu *vcpu)
+{
+	/* Returning to host will clear PSR.I, remask PMR if needed */
+	if (system_uses_irq_prio_masking())
+		gic_write_pmr(GIC_PRIO_IRQOFF);
 }
 
 static void __vcpu_save_state(struct kvm_vcpu *vcpu, bool save_debug)
@@ -150,6 +153,11 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 	 * running vcpu.
 	 */
 	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
+
+	if (vcpu->arch.ctxt.is_host)
+		__kvm_vcpu_switch_to_host(vcpu, running_vcpu);
+	else
+		__kvm_vcpu_switch_to_guest(running_vcpu, vcpu);
 
 	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
 		u64 val;
@@ -198,8 +206,6 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 				      &vcpu->arch.ctxt);
 
 	__pmu_restore(vcpu);
-
-	__hyp_gic_pmr_restore(vcpu);
 
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
