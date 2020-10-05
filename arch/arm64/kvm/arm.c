@@ -1472,58 +1472,13 @@ out:
 	return err;
 }
 
-/*
- * Alloc pages and mark them reserved so the kernel never tries to
- * take them away from the hypervisor.
- */
-static unsigned long alloc_hyp_pages(gfp_t flags, unsigned int order)
-{
-	struct page *page;
-	unsigned long i;
-
-	page = alloc_pages(flags, order);
-	if (!page)
-		return 0;
-
-	for (i = 0; i < (1ul << order); ++i)
-		mark_page_reserved(page + i);
-
-	return (unsigned long)page_address(page);
-}
-
-static unsigned long alloc_hyp_page(gfp_t flags)
-{
-	return alloc_hyp_pages(flags, 0);
-}
-
-/*
- * Free pages which were previously marked reserved for the hypervisor.
- */
-static void free_hyp_pages(unsigned long addr, unsigned int order)
-{
-	unsigned long i;
-	struct page *page;
-
-	if (!addr)
-		return;
-
-	page = virt_to_page(addr);
-	for (i = 0; i < (1ul << order); ++i)
-		free_reserved_page(page + i);
-}
-
-static void free_hyp_page(unsigned long addr)
-{
-	return free_hyp_pages(addr, 0);
-}
-
 static void teardown_hyp_mode(void)
 {
 	int cpu;
 
 	free_hyp_pgds();
 	for_each_possible_cpu(cpu)
-		free_hyp_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
+		free_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
 }
 
 /**
@@ -1547,7 +1502,7 @@ static int init_hyp_mode(void)
 	for_each_possible_cpu(cpu) {
 		unsigned long stack_page;
 
-		stack_page = alloc_hyp_page(GFP_KERNEL);
+		stack_page = __get_free_page(GFP_KERNEL);
 		if (!stack_page) {
 			err = -ENOMEM;
 			goto out_err;
