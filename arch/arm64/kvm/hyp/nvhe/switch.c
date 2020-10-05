@@ -190,6 +190,9 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 
 	__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 
+	if (vcpu->arch.flags & KVM_ARM64_FP_ENABLED)
+		__fpsimd_save_fpexc32(vcpu);
+
 	/*
 	 * This must come after restoring the host sysregs, since a non-VHE
 	 * system may enable SPE here and make use of the TTBRs.
@@ -208,8 +211,6 @@ static void __vcpu_save_state(struct kvm_vcpu *vcpu)
 	__sysreg_save_state_nvhe(&vcpu->arch.ctxt);
 	__sysreg32_save_state(vcpu);
 	__hyp_vgic_save_state(vcpu);
-
-	__fpsimd_save_fpexc32(vcpu);
 }
 
 static void __vcpu_restore_state(struct kvm_vcpu *vcpu)

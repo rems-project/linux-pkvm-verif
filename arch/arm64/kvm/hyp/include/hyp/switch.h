@@ -56,9 +56,6 @@ static inline bool update_fp_enabled(struct kvm_vcpu *vcpu)
 /* Save the 32-bit only FPSIMD system register state */
 static inline void __fpsimd_save_fpexc32(struct kvm_vcpu *vcpu)
 {
-	if (!(vcpu->arch.flags & KVM_ARM64_FP_ENABLED))
-		return;
-
 	if (!vcpu_el1_is_32bit(vcpu))
 		return;
 
