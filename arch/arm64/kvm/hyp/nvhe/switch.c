@@ -155,6 +155,8 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 
 	__pmu_switch_to_guest();
 
+	__sysreg_save_state_nvhe(&host_vcpu->arch.ctxt);
+
 	/*
 	 * We must restore the 32-bit state before the sysregs, thanks
 	 * to erratum #852523 (Cortex-A57) or #853709 (Cortex-A72).
@@ -178,6 +180,9 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
+	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
+
+	__sysreg_save_state_nvhe(guest_ctxt);
 	__sysreg32_save_state(vcpu);
 	__timer_disable_traps(vcpu);
 	__hyp_vgic_save_state(vcpu);
@@ -203,12 +208,7 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 		gic_write_pmr(GIC_PRIO_IRQOFF);
 }
 
-static void __vcpu_save_state(struct kvm_vcpu *vcpu)
-{
-	__sysreg_save_state_nvhe(&vcpu->arch.ctxt);
-}
-
-static void __vcpu_restore_state(struct kvm_vcpu *vcpu)
+static void __vcpu_switch_to(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu *running_vcpu;
 
@@ -248,8 +248,7 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 			return ARM_EXCEPTION_IRQ;
 		}
 
-		__vcpu_save_state(running_vcpu);
-		__vcpu_restore_state(vcpu);
+		__vcpu_switch_to(vcpu);
 	}
 
 	__set_vcpu_arch_workaround_state(vcpu);
