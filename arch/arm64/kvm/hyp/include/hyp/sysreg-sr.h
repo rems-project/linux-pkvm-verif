@@ -83,14 +83,12 @@ static inline void __sysreg_restore_el1_state(struct kvm_cpu_context *ctxt)
 	} else	if (!ctxt->is_host) {
 		/*
 		 * Must only be done for guest registers, hence the context
-		 * test. Pairs with nVHE's __activate_traps().
+		 * test. We're coming from the host, so SCTLR.M is already
+		 * set. Pairs with nVHE's __activate_traps().
 		 */
 		write_sysreg_el1((ctxt_sys_reg(ctxt, TCR_EL1) |
 				  TCR_EPD1_MASK | TCR_EPD0_MASK),
 				 SYS_TCR);
-		isb();
-		write_sysreg_el1(ctxt->sys_regs[SCTLR_EL1] | SCTLR_ELx_M,
-				 SYS_SCTLR);
 		isb();
 	}
 
