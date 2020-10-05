@@ -170,7 +170,6 @@ void __noreturn kvm_hyp_main(void)
 
 	host_vcpu->arch.flags = KVM_ARM64_HOST_VCPU_FLAGS;
 	host_vcpu->arch.workaround_flags = VCPU_WORKAROUND_2_FLAG;
-	host_vcpu->arch.debug_ptr = &host_vcpu->arch.vcpu_debug_state;
 
 	/*
 	 * The first time entering the host is seen by the host as the return

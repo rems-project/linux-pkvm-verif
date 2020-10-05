@@ -125,34 +125,38 @@ static void __debug_restore_state(struct kvm_guest_debug_arch *dbg,
 	write_sysreg(ctxt_sys_reg(ctxt, MDCCINT_EL1), mdccint_el1);
 }
 
-static inline void __debug_switch_to_guest_common(struct kvm_vcpu *vcpu,
-						  struct kvm_guest_debug_arch *host_dbg,
-						  struct kvm_cpu_context *host_ctxt)
+static inline void __debug_switch_to_guest_common(struct kvm_vcpu *vcpu)
 {
+	struct kvm_cpu_context *host_ctxt;
 	struct kvm_cpu_context *guest_ctxt;
+	struct kvm_guest_debug_arch *host_dbg;
 	struct kvm_guest_debug_arch *guest_dbg;
 
 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
 		return;
 
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	guest_ctxt = &vcpu->arch.ctxt;
+	host_dbg = &vcpu->arch.host_debug_state.regs;
 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);
 
 	__debug_save_state(host_dbg, host_ctxt);
 	__debug_restore_state(guest_dbg, guest_ctxt);
 }
 
-static inline void __debug_switch_to_host_common(struct kvm_vcpu *vcpu,
-						 struct kvm_guest_debug_arch *host_dbg,
-						 struct kvm_cpu_context *host_ctxt)
+static inline void __debug_switch_to_host_common(struct kvm_vcpu *vcpu)
 {
+	struct kvm_cpu_context *host_ctxt;
 	struct kvm_cpu_context *guest_ctxt;
+	struct kvm_guest_debug_arch *host_dbg;
 	struct kvm_guest_debug_arch *guest_dbg;
 
 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
 		return;
 
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	guest_ctxt = &vcpu->arch.ctxt;
+	host_dbg = &vcpu->arch.host_debug_state.regs;
 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);
 
 	__debug_save_state(guest_dbg, guest_ctxt);

@@ -181,7 +181,7 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 	__hyp_vgic_restore_state(vcpu);
 	__timer_enable_traps(vcpu);
 
-	__debug_switch_to_guest(host_vcpu, vcpu);
+	__debug_switch_to_guest(vcpu);
 }
 
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
@@ -206,7 +206,7 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 	 * This must come after restoring the host sysregs, since a non-VHE
 	 * system may enable SPE here and make use of the TTBRs.
 	 */
-	__debug_switch_to_host(host_vcpu, vcpu);
+	__debug_switch_to_host(vcpu);
 
 	__pmu_switch_to_host();
 

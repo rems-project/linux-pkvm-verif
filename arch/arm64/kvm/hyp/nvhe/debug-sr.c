@@ -58,29 +58,17 @@ static void __debug_restore_spe(u64 pmscr_el1)
 	write_sysreg_s(pmscr_el1, SYS_PMSCR_EL1);
 }
 
-void __debug_switch_to_guest(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
+void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
 {
-	struct kvm_cpu_context *host_ctxt;
-	struct kvm_guest_debug_arch *host_dbg;
-
-	host_ctxt = &host_vcpu->arch.ctxt;
-	host_dbg = host_vcpu->arch.debug_ptr;
-
 	/* Disable and flush SPE data generation */
 	__debug_save_spe(&vcpu->arch.host_debug_state.pmscr_el1);
-	__debug_switch_to_guest_common(vcpu, host_dbg, host_ctxt);
+	__debug_switch_to_guest_common(vcpu);
 }
 
-void __debug_switch_to_host(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
+void __debug_switch_to_host(struct kvm_vcpu *vcpu)
 {
-	struct kvm_cpu_context *host_ctxt;
-	struct kvm_guest_debug_arch *host_dbg;
-
-	host_ctxt = &host_vcpu->arch.ctxt;
-	host_dbg = host_vcpu->arch.debug_ptr;
-
 	__debug_restore_spe(vcpu->arch.host_debug_state.pmscr_el1);
-	__debug_switch_to_host_common(vcpu, host_dbg, host_ctxt);
+	__debug_switch_to_host_common(vcpu);
 }
 
 u32 __kvm_get_mdcr_el2(void)
