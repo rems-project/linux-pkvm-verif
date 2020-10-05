@@ -49,7 +49,7 @@ __asm__(".arch_extension	virt");
 DEFINE_PER_CPU(struct kvm_cpu_context, kvm_host_ctxt);
 DEFINE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
-phys_addr_t *kvm_arm_hyp_percpu_base;
+unsigned long *kvm_arm_hyp_percpu_base;
 
 /* The VMID used in the VTTBR */
 static atomic64_t kvm_vmid_gen = ATOMIC64_INIT(1);
@@ -1567,7 +1567,7 @@ static int init_hyp_mode(void)
 	/*
 	 * Allocate and initialize pages for Hypervisor-mode percpu regions.
 	 */
-	kvm_arm_hyp_percpu_base = (phys_addr_t*)alloc_hyp_pages(
+	kvm_arm_hyp_percpu_base = (unsigned long*)alloc_hyp_pages(
 			GFP_KERNEL | __GFP_ZERO, kvm_hyp_percpu_array_order);
 	if (!kvm_arm_hyp_percpu_base) {
 		err = -ENOMEM;
@@ -1583,7 +1583,7 @@ static int init_hyp_mode(void)
 		}
 
 		memcpy((void*)percpu_base, kvm_hyp_percpu_begin, kvm_hyp_percpu_size);
-		kvm_arm_hyp_percpu_base[cpu] = __pa(percpu_base);
+		kvm_arm_hyp_percpu_base[cpu] = percpu_base;
 	}
 
 	/*
@@ -1644,16 +1644,8 @@ static int init_hyp_mode(void)
 	/*
 	 * Map Hyp percpu pages
 	 */
-	err = create_hyp_mappings(kvm_arm_hyp_percpu_base,
-			kvm_arm_hyp_percpu_base + sizeof(unsigned long) * num_possible_cpus(),
-			PAGE_HYP);
-	if (err) {
-		kvm_err("Cannot map kvm_arm_hyp_percpu_base\n");
-		goto out_err;
-	}
-
 	for_each_possible_cpu(cpu) {
-		char *percpu_begin = (char *)__va(kvm_arm_hyp_percpu_base[cpu]);
+		char *percpu_begin = (char *)kvm_arm_hyp_percpu_base[cpu];
 		char *percpu_end = percpu_begin + PAGE_ALIGN(kvm_hyp_percpu_size);
 		err = create_hyp_mappings(percpu_begin, percpu_end, PAGE_HYP);
 
