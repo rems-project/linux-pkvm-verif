@@ -131,11 +131,15 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 	}
 
 	__pmu_switch_to_guest();
+
+	__timer_enable_traps(vcpu);
 }
 
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
+	__timer_disable_traps(vcpu);
+
 	__pmu_switch_to_host();
 
 	/* Returning to host will clear PSR.I, remask PMR if needed */
@@ -207,7 +211,6 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 		__activate_traps(vcpu);
 
 	__hyp_vgic_restore_state(vcpu);
-	__timer_restore_traps(vcpu);
 
 	/*
 	 * This must come after restoring the sysregs since SPE may make use if
@@ -277,7 +280,7 @@ void __noreturn hyp_panic(void)
 	unsigned long str_va;
 
 	if (vcpu != host_vcpu) {
-		__timer_restore_traps(host_vcpu);
+		__timer_disable_traps(vcpu);
 		__deactivate_traps(host_vcpu, vcpu);
 		__restore_stage2(host_vcpu);
 		__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
