@@ -1603,18 +1603,7 @@ static int init_hyp_mode(void)
 		goto out_err;
 	}
 
-	/*
-	 * .hyp.bss is placed at the begining of the .bss section, so map that
-	 * part RW, and the rest RO as the hyp shouldn't be touching it.
-	 */
 	err = create_hyp_mappings(kvm_ksym_ref(__bss_start),
-				  kvm_ksym_ref(__hyp_bss_end), PAGE_HYP);
-	if (err) {
-		kvm_err("Cannot map hyp bss section: %d\n", err);
-		goto out_err;
-	}
-
-	err = create_hyp_mappings(kvm_ksym_ref(__hyp_bss_end),
 				  kvm_ksym_ref(__bss_stop), PAGE_HYP_RO);
 	if (err) {
 		kvm_err("Cannot map bss section\n");

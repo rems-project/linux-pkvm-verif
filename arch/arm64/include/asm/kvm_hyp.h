@@ -31,8 +31,6 @@ static inline struct kvm_cpu_context *get_hyp_ctxt(void)
 #endif
 }
 
-#define __hyp_bss __section(.hyp.bss)
-
 #define read_sysreg_elx(r,nvh,vh)					\
 	({								\
 		u64 reg;						\

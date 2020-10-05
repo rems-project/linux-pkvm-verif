@@ -48,14 +48,6 @@ jiffies = jiffies_64;
 	HYPERVISOR_EXTABLE				\
 	__hyp_text_end = .;
 
-#undef BSS_FIRST_SECTIONS
-#define BSS_FIRST_SECTIONS				\
-	. = ALIGN(PAGE_SIZE);				\
-	__hyp_bss_start = .;				\
-	*(.hyp.bss)					\
-	. = ALIGN(PAGE_SIZE);				\
-	__hyp_bss_end = .;
-
 #define IDMAP_TEXT					\
 	. = ALIGN(SZ_4K);				\
 	__idmap_text_start = .;				\

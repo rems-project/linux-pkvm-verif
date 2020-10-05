@@ -49,8 +49,6 @@ quiet_cmd_hypcopy = HYPCOPY $@
       $(OBJCOPY)	--prefix-symbols=__kvm_nvhe_			\
 			--remove-section=!.text				\
 			--rename-section=.text=.hyp.text		\
-			--remove-section=!.bss				\
-			--rename-section=.bss=.hyp.bss			\
 			--remove-section=!.data..percpu		\
 			--rename-section=.data..percpu=.hyp.data..percpu \
 			--remove-section=!.data..percpu..read_mostly	\
