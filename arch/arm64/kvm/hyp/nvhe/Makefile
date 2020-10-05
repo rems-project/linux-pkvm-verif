@@ -46,22 +46,11 @@ quiet_cmd_hypcopy = HYPCOPY $@
 		echo "$@: function reordering not supported in nVHE hyp code" >&2; \
 		/bin/false;						\
 	fi;								\
-      $(OBJCOPY)	--prefix-symbols=__kvm_nvhe_			\
-			--remove-section=!.text				\
-			--rename-section=.text=.hyp.text		\
-			--remove-section=!.data..percpu		\
-			--rename-section=.data..percpu=.hyp.data..percpu \
-			--remove-section=!.data..percpu..read_mostly	\
-			--rename-section=.data..percpu..read_mostly=.hyp.data..percpu..read_mostly \
-			--remove-section=!.hyp.*			\
-			--remove-section=!.altinst*			\
-			--remove-section=!.rodata*			\
-			--remove-section=!.rela*			\
-			--remove-section=!.shstrtab			\
-			--remove-section=!.strtab			\
-			--remove-section=!.symtab			\
-			--remove-section=.*				\
-			$< $@
+	$(OBJCOPY) --prefix-symbols=__kvm_nvhe_				\
+		   --rename-section=.text=.hyp.text			\
+		   --rename-section=.data..percpu=.hyp.data..percpu	\
+		   --rename-section=.data..percpu..read_mostly=.hyp.data..percpu..read_mostly \
+		   $< $@
 
 # Remove ftrace and Shadow Call Stack CFLAGS.
 # This is equivalent to the 'notrace' and '__noscs' annotations.
