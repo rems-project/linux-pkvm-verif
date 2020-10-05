@@ -51,6 +51,12 @@ DEFINE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
 unsigned long *kvm_arm_hyp_percpu_base;
 
+DECLARE_KVM_NVHE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
+DECLARE_KVM_NVHE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
+DECLARE_KVM_NVHE_PER_CPU(u64, kvm_host_pmscr_el1);
+DECLARE_KVM_NVHE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
+DECLARE_KVM_NVHE_PER_CPU(struct kvm_pmu_events, kvm_pmu_events);
+
 /* The VMID used in the VTTBR */
 static atomic64_t kvm_vmid_gen = ATOMIC64_INIT(1);
 static u32 kvm_next_vmid;
@@ -1644,7 +1650,58 @@ static int init_hyp_mode(void)
 		}
 	}
 
-	hyp_init_aux_data();
+	for_each_possible_cpu(cpu) {
+		struct kvm_cpu_context *hyp_ctxt;
+		struct kvm_vcpu *host_vcpu;
+		u64 *host_pmscr;
+		struct kvm_vcpu **running_vcpu;
+		struct kvm_pmu_events *pmu;
+
+		hyp_ctxt = per_cpu_ptr_nvhe(kvm_hyp_ctxt, cpu);
+		err = create_hyp_mappings(hyp_ctxt, hyp_ctxt + 1, PAGE_HYP);
+
+		if (err) {
+			kvm_err("Cannot map hyp CPU context: %d\n", err);
+			goto out_err;
+		}
+
+		host_vcpu = per_cpu_ptr_nvhe(kvm_host_vcpu, cpu);
+		err = create_hyp_mappings(host_vcpu, host_vcpu + 1, PAGE_HYP);
+
+		if (err) {
+			kvm_err("Cannot map host vCPU: %d\n", err);
+			goto out_err;
+		}
+
+		host_pmscr = per_cpu_ptr_nvhe(kvm_host_pmscr_el1, cpu);
+		err = create_hyp_mappings(host_pmscr, host_pmscr + 1, PAGE_HYP);
+
+		if (err) {
+			kvm_err("Cannot map host pmscr_el1: %d\n", err);
+			goto out_err;
+		}
+
+		running_vcpu = per_cpu_ptr_nvhe(kvm_hyp_running_vcpu, cpu);
+		err = create_hyp_mappings(running_vcpu, running_vcpu + 1, PAGE_HYP);
+
+		if (err) {
+			kvm_err("Cannot map running vCPU: %d\n", err);
+			goto out_err;
+		}
+
+		pmu = per_cpu_ptr_nvhe(kvm_pmu_events, cpu);
+		err = create_hyp_mappings(pmu, pmu + 1, PAGE_HYP);
+
+		if (err) {
+			kvm_err("Cannot map PMU events: %d\n", err);
+			goto out_err;
+		}
+	}
+
+	err = hyp_init_aux_data();
+	if (err)
+		kvm_err("Cannot map host auxiliary data: %d\n", err);
+
 	return 0;
 
 out_err:
