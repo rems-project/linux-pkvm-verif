@@ -25,9 +25,9 @@ DECLARE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 static inline struct kvm_cpu_context *get_hyp_ctxt(void)
 {
 #ifdef __KVM_NVHE_HYPERVISOR__
-	return this_cpu_ptr(&kvm_hyp_ctxt);
+	return __hyp_this_cpu_ptr(kvm_hyp_ctxt);
 #else
-	return this_cpu_ptr(&kvm_host_ctxt);
+	return __hyp_this_cpu_ptr(kvm_host_ctxt);
 #endif
 }
 

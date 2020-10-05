@@ -116,7 +116,7 @@ void __hyp_gic_pmr_restore(struct kvm_vcpu *vcpu)
 
 static void __pmu_restore(struct kvm_vcpu *vcpu)
 {
-	struct kvm_pmu_events *pmu = this_cpu_ptr(&kvm_pmu_events);
+	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
 	u32 clr;
 	u32 set;
 
@@ -197,7 +197,7 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 
 	__hyp_gic_pmr_restore(vcpu);
 
-	*this_cpu_ptr(&kvm_hyp_running_vcpu) = vcpu;
+	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
 
 /* Switch to the guest for legacy non-VHE systems */
@@ -207,8 +207,8 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 	struct kvm_vcpu *running_vcpu;
 	u64 exit_code;
 
-	hyp_ctxt = this_cpu_ptr(&kvm_hyp_ctxt);
-	running_vcpu = __this_cpu_read(kvm_hyp_running_vcpu);
+	hyp_ctxt = __hyp_this_cpu_ptr(kvm_hyp_ctxt);
+	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 
 	if (running_vcpu != vcpu) {
 		bool switch_debug;
@@ -250,8 +250,8 @@ void __noreturn hyp_panic(void)
 	u64 spsr = read_sysreg_el2(SYS_SPSR);
 	u64 elr = read_sysreg_el2(SYS_ELR);
 	u64 par = read_sysreg(par_el1);
-	struct kvm_vcpu *host_vcpu = this_cpu_ptr(&kvm_host_vcpu);
-	struct kvm_vcpu *vcpu = __this_cpu_read(kvm_hyp_running_vcpu);
+	struct kvm_vcpu *host_vcpu = __hyp_this_cpu_ptr(kvm_host_vcpu);
+	struct kvm_vcpu *vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 	unsigned long str_va;
 
 	if (vcpu != host_vcpu) {

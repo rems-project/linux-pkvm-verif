@@ -20,8 +20,8 @@ void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
 		return;
 
-	host_ctxt = this_cpu_ptr(&kvm_host_ctxt);
-	host_dbg = this_cpu_ptr(&kvm_host_debug_state);
+	host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	host_dbg = __hyp_this_cpu_ptr(kvm_host_debug_state);
 
 	guest_ctxt = &vcpu->arch.ctxt;
 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);
@@ -40,8 +40,8 @@ void __debug_switch_to_host(struct kvm_vcpu *vcpu)
 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
 		return;
 
-	host_ctxt = this_cpu_ptr(&kvm_host_ctxt);
-	host_dbg = this_cpu_ptr(&kvm_host_debug_state);
+	host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	host_dbg = __hyp_this_cpu_ptr(kvm_host_debug_state);
 
 	guest_ctxt = &vcpu->arch.ctxt;
 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);

@@ -165,7 +165,7 @@ void __noreturn kvm_hyp_main(void)
 	struct kvm_vcpu *host_vcpu;
 	u64 mdcr_el2;
 
-	host_vcpu = this_cpu_ptr(&kvm_host_vcpu);
+	host_vcpu = __hyp_this_cpu_ptr(kvm_host_vcpu);
 
 	kvm_init_host_cpu_context(&host_vcpu->arch.ctxt);
 
@@ -186,7 +186,7 @@ void __noreturn kvm_hyp_main(void)
 	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, 0, 0, 0);
 
 	/* The host is already loaded so note it as the running vcpu. */
-	*this_cpu_ptr(&kvm_hyp_running_vcpu) = host_vcpu;
+	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = host_vcpu;
 
 	while (true) {
 		u64 exit_code;

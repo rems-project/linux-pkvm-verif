@@ -499,7 +499,7 @@ static inline void __set_vcpu_arch_workaround_state(struct kvm_vcpu *vcpu)
 	 * vpu wants it disabled, so be it...
 	 */
 	if (__needs_ssbd_off(vcpu) &&
-	    __this_cpu_read(arm64_ssbd_callback_required))
+	    __hyp_this_cpu_read(arm64_ssbd_callback_required))
 		arm_smccc_1_1_smc(ARM_SMCCC_ARCH_WORKAROUND_2, 0, NULL);
 #endif
 }
@@ -511,7 +511,7 @@ static inline void __set_hyp_arch_workaround_state(struct kvm_vcpu *vcpu)
 	 * If the vcpu has disabled the workaround, bring it back on.
 	 */
 	if (__needs_ssbd_off(vcpu) &&
-	    __this_cpu_read(arm64_ssbd_callback_required))
+	    __hyp_this_cpu_read(arm64_ssbd_callback_required))
 		arm_smccc_1_1_smc(ARM_SMCCC_ARCH_WORKAROUND_2, 1, NULL);
 #endif
 }
