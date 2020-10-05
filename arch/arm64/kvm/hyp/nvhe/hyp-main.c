@@ -163,20 +163,13 @@ void __noreturn kvm_hyp_main(void)
 {
 	/* Set tpidr_el2 for use by HYP */
 	struct kvm_vcpu *host_vcpu;
-	u64 mdcr_el2;
 
 	host_vcpu = __hyp_this_cpu_ptr(kvm_host_vcpu);
 
 	kvm_init_host_cpu_context(&host_vcpu->arch.ctxt);
 
-	mdcr_el2 = read_sysreg(mdcr_el2);
-	mdcr_el2 &= MDCR_EL2_HPMN_MASK;
-	mdcr_el2 |= MDCR_EL2_E2PB_MASK << MDCR_EL2_E2PB_SHIFT;
-
 	host_vcpu->arch.flags = KVM_ARM64_HOST_VCPU_FLAGS;
 	host_vcpu->arch.workaround_flags = VCPU_WORKAROUND_2_FLAG;
-	host_vcpu->arch.hcr_el2 = HCR_HOST_NVHE_FLAGS;
-	host_vcpu->arch.mdcr_el2 = mdcr_el2;
 	host_vcpu->arch.debug_ptr = &host_vcpu->arch.vcpu_debug_state;
 
 	/*

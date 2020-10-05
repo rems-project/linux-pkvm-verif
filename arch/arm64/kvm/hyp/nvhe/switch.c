@@ -58,9 +58,13 @@ static void __activate_traps(struct kvm_vcpu *vcpu)
 	}
 }
 
-static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
+static void __deactivate_traps(struct kvm_vcpu *vcpu)
 {
+	u64 mdcr_el2;
+
 	___deactivate_traps(vcpu);
+
+	mdcr_el2 = read_sysreg(mdcr_el2);
 
 	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
 		u64 val;
@@ -81,8 +85,11 @@ static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu
 
 	__deactivate_traps_common();
 
-	write_sysreg(host_vcpu->arch.mdcr_el2, mdcr_el2);
-	write_sysreg(host_vcpu->arch.hcr_el2, hcr_el2);
+	mdcr_el2 &= MDCR_EL2_HPMN_MASK;
+	mdcr_el2 |= MDCR_EL2_E2PB_MASK << MDCR_EL2_E2PB_SHIFT;
+
+	write_sysreg(mdcr_el2, mdcr_el2);
+	write_sysreg(HCR_HOST_NVHE_FLAGS, hcr_el2);
 	write_sysreg(CPTR_EL2_DEFAULT, cptr_el2);
 }
 
@@ -187,7 +194,7 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 	__timer_disable_traps(vcpu);
 	__hyp_vgic_save_state(vcpu);
 
-	__deactivate_traps(host_vcpu, vcpu);
+	__deactivate_traps(vcpu);
 	__deactivate_vm(vcpu);
 
 	__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
@@ -276,7 +283,7 @@ void __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 
 	if (vcpu != host_vcpu) {
 		__timer_disable_traps(vcpu);
-		__deactivate_traps(host_vcpu, vcpu);
+		__deactivate_traps(vcpu);
 		__deactivate_vm(vcpu);
 		__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 	}
