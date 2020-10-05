@@ -72,8 +72,8 @@ SYM_FUNC_START(__guest_enter)
 	// Save the host's sp_el0
 	save_sp_el0	x1, x2
 
-	// Now the hyp state is stored if we have a pending RAS SError it must
-	// affect the hyp. If physical IRQ interrupts are going to be trapped
+	// Now the host state is stored if we have a pending RAS SError it must
+	// affect the host. If physical IRQ interrupts are going to be trapped
 	// and there are already asynchronous exceptions pending then we defer
 	// the entry. The DSB isn't necessary before v8.2 as any SError would
 	// be fatal.

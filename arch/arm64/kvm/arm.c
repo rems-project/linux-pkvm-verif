@@ -47,7 +47,6 @@ __asm__(".arch_extension	virt");
 #endif
 
 DEFINE_PER_CPU(kvm_host_data_t, kvm_host_data);
-DEFINE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
 DEFINE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
 
@@ -1550,7 +1549,6 @@ static int init_hyp_mode(void)
 
 	for_each_possible_cpu(cpu) {
 		kvm_host_data_t *cpu_data;
-		struct kvm_vcpu *host_vcpu;
 		struct kvm_vcpu **running_vcpu;
 
 		cpu_data = per_cpu_ptr(&kvm_host_data, cpu);
@@ -1558,14 +1556,6 @@ static int init_hyp_mode(void)
 
 		if (err) {
 			kvm_err("Cannot map host CPU state: %d\n", err);
-			goto out_err;
-		}
-
-		host_vcpu = per_cpu_ptr(&kvm_host_vcpu, cpu);
-		err = create_hyp_mappings(host_vcpu, host_vcpu + 1, PAGE_HYP);
-
-		if (err) {
-			kvm_err("Cannot map host vCPU: %d\n", err);
 			goto out_err;
 		}
 

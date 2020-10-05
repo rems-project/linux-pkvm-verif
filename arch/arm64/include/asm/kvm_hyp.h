@@ -13,9 +13,6 @@
 #include <asm/sysreg.h>
 
 DECLARE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
-#ifdef __KVM_NVHE_HYPERVISOR__
-DECLARE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
-#endif
 
 #define read_sysreg_elx(r,nvh,vh)					\
 	({								\

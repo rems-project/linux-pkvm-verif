@@ -41,6 +41,20 @@
 
 	.text
 
+.macro do_el2_call
+	/*
+	 * Shuffle the parameters before calling the function
+	 * pointed to in x0. Assumes parameters in x[1,2,3].
+	 */
+	str	lr, [sp, #-16]!
+	mov	lr, x0
+	mov	x0, x1
+	mov	x1, x2
+	mov	x2, x3
+	blr	lr
+	ldr	lr, [sp], #16
+.endm
+
 el1_sync:				// Guest trapped into EL2
 
 	mrs	x0, esr_el2
@@ -54,12 +68,11 @@ el1_sync:				// Guest trapped into EL2
 	cbnz	x1, el1_hvc_guest	// called HVC
 
 	/* Here, we're pretty sure the host called HVC. */
-	ldp	x0, x1, [sp]
+	ldp	x0, x1, [sp], #16
 
 	/* Check for a stub HVC call */
 	cmp	x0, #HVC_STUB_HCALL_NR
-	b.hs	el1_trap
-	add	sp, sp, #16
+	b.hs	1f
 
 	/*
 	 * Compute the idmap address of __kvm_handle_stub_hvc and
@@ -75,6 +88,16 @@ el1_sync:				// Guest trapped into EL2
 	/* x5 = __pa(x5) */
 	sub	x5, x5, x6
 	br	x5
+
+1:
+	/*
+	 * Perform the EL2 call
+	 */
+	kern_hyp_va	x0
+	do_el2_call
+
+	eret
+	sb
 #endif /* __KVM_NVHE_HYPERVISOR__ */
 
 el1_hvc_guest:

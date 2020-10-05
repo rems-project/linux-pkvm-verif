@@ -409,8 +409,8 @@ static inline bool __hyp_handle_ptrauth(struct kvm_vcpu *vcpu)
  */
 static inline bool fixup_guest_exit(struct kvm_vcpu *vcpu, u64 *exit_code)
 {
-	/* Flush guest SErrors but leave them pending for the host. */
-	if (ARM_SERROR_PENDING(*exit_code) && !vcpu->arch.ctxt.is_host)
+	/* Flush guest SErrors. */
+	if (ARM_SERROR_PENDING(*exit_code))
 		__handle_sei();
 
 	if (ARM_EXCEPTION_CODE(*exit_code) != ARM_EXCEPTION_IRQ)
