@@ -15,7 +15,7 @@ void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
 	struct kvm_cpu_context *host_ctxt;
 	struct kvm_guest_debug_arch *host_dbg;
 
-	host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	host_dbg = __hyp_this_cpu_ptr(kvm_host_debug_state);
 
 	__debug_switch_to_guest_common(vcpu, host_dbg, host_ctxt);
@@ -26,7 +26,7 @@ void __debug_switch_to_host(struct kvm_vcpu *vcpu)
 	struct kvm_cpu_context *host_ctxt;
 	struct kvm_guest_debug_arch *host_dbg;
 
-	host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	host_dbg = __hyp_this_cpu_ptr(kvm_host_debug_state);
 
 	__debug_switch_to_host_common(vcpu, host_dbg, host_ctxt);

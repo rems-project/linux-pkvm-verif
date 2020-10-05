@@ -108,7 +108,7 @@ static int __kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
 	struct kvm_cpu_context *guest_ctxt;
 	u64 exit_code;
 
-	host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 	guest_ctxt = &vcpu->arch.ctxt;
 
@@ -209,7 +209,7 @@ NOKPROBE_SYMBOL(__hyp_call_panic);
 
 void __noreturn hyp_panic(void)
 {
-	struct kvm_cpu_context *host_ctxt = __hyp_this_cpu_ptr(kvm_host_ctxt);
+	struct kvm_cpu_context *host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	u64 spsr = read_sysreg_el2(SYS_SPSR);
 	u64 elr = read_sysreg_el2(SYS_ELR);
 	u64 par = read_sysreg(par_el1);

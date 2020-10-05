@@ -14,22 +14,11 @@
 
 DECLARE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
 #ifdef __KVM_NVHE_HYPERVISOR__
-DECLARE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
 DECLARE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
 DECLARE_PER_CPU(u64, kvm_host_pmscr_el1);
 #else
-DECLARE_PER_CPU(struct kvm_cpu_context, kvm_host_ctxt);
 DECLARE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 #endif
-
-static inline struct kvm_cpu_context *get_hyp_ctxt(void)
-{
-#ifdef __KVM_NVHE_HYPERVISOR__
-	return __hyp_this_cpu_ptr(kvm_hyp_ctxt);
-#else
-	return __hyp_this_cpu_ptr(kvm_host_ctxt);
-#endif
-}
 
 #define read_sysreg_elx(r,nvh,vh)					\
 	({								\
@@ -111,7 +100,7 @@ void activate_traps_vhe_load(struct kvm_vcpu *vcpu);
 void deactivate_traps_vhe_put(void);
 #endif
 
-u64 __guest_enter(struct kvm_vcpu *vcpu, struct kvm_cpu_context *hyp_ctxt);
+u64 __guest_enter(struct kvm_vcpu *vcpu, struct kvm_cpu_context *host_ctxt);
 
 void __handle_sei(void);
 

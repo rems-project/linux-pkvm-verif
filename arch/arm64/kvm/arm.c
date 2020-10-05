@@ -46,10 +46,8 @@
 __asm__(".arch_extension	virt");
 #endif
 
-DEFINE_PER_CPU(struct kvm_cpu_context, kvm_host_ctxt);
-DEFINE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
+DEFINE_PER_CPU(kvm_host_data_t, kvm_host_data);
 DEFINE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
-DEFINE_PER_CPU(struct kvm_pmu_events, kvm_pmu_events);
 DEFINE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
 DEFINE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 DEFINE_PER_CPU(u64, kvm_host_pmscr_el1);
@@ -1284,8 +1282,8 @@ static void cpu_init_hyp_mode(void)
 	 * kernel's mapping to the linear mapping, and store it in tpidr_el2
 	 * so that we can use adr_l to access per-cpu variables in EL2.
 	 */
-	tpidr_el2 = ((unsigned long)this_cpu_ptr(&kvm_hyp_running_vcpu) -
-		     (unsigned long)kvm_ksym_ref(&kvm_hyp_running_vcpu));
+	tpidr_el2 = ((unsigned long)this_cpu_ptr(&kvm_host_data) -
+		     (unsigned long)kvm_ksym_ref(&kvm_host_data));
 
 	pgd_ptr = kvm_mmu_get_httbr();
 	hyp_stack_ptr = __this_cpu_read(kvm_arm_hyp_stack_page) + PAGE_SIZE;
@@ -1323,14 +1321,14 @@ static void cpu_hyp_reset(void)
 
 static void cpu_hyp_reinit(void)
 {
+	kvm_init_host_cpu_context(&this_cpu_ptr(&kvm_host_data)->host_ctxt);
+
 	cpu_hyp_reset();
 
-	if (is_kernel_in_hyp_mode()) {
-		kvm_init_host_cpu_context(this_cpu_ptr(&kvm_host_ctxt));
+	if (is_kernel_in_hyp_mode())
 		kvm_timer_init_vhe();
-	} else {
+	else
 		cpu_init_hyp_mode();
-	}
 
 	kvm_arm_init_debug();
 
@@ -1556,17 +1554,16 @@ static int init_hyp_mode(void)
 	}
 
 	for_each_possible_cpu(cpu) {
-		struct kvm_cpu_context *hyp_ctxt;
+		kvm_host_data_t *cpu_data;
 		struct kvm_vcpu *host_vcpu;
 		u64 *host_pmscr;
 		struct kvm_vcpu **running_vcpu;
-		struct kvm_pmu_events *pmu;
 
-		hyp_ctxt = per_cpu_ptr(&kvm_hyp_ctxt, cpu);
-		err = create_hyp_mappings(hyp_ctxt, hyp_ctxt + 1, PAGE_HYP);
+		cpu_data = per_cpu_ptr(&kvm_host_data, cpu);
+		err = create_hyp_mappings(cpu_data, cpu_data + 1, PAGE_HYP);
 
 		if (err) {
-			kvm_err("Cannot map hyp CPU context: %d\n", err);
+			kvm_err("Cannot map host CPU state: %d\n", err);
 			goto out_err;
 		}
 
@@ -1591,14 +1588,6 @@ static int init_hyp_mode(void)
 
 		if (err) {
 			kvm_err("Cannot map running vCPU: %d\n", err);
-			goto out_err;
-		}
-
-		pmu = per_cpu_ptr(&kvm_pmu_events, cpu);
-		err = create_hyp_mappings(pmu, pmu + 1, PAGE_HYP);
-
-		if (err) {
-			kvm_err("Cannot map PMU events: %d\n", err);
 			goto out_err;
 		}
 	}

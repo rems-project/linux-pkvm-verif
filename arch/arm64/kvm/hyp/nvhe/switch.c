@@ -114,7 +114,7 @@ static void __hyp_vgic_restore_state(struct kvm_vcpu *vcpu)
  */
 static void __pmu_switch_to_guest(void)
 {
-	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
+	struct kvm_pmu_events *pmu = &__hyp_this_cpu_ptr(kvm_host_data)->pmu_events;
 
 	if (pmu->events_host)
 		write_sysreg(pmu->events_host, pmcntenclr_el0);
@@ -128,7 +128,7 @@ static void __pmu_switch_to_guest(void)
  */
 static void __pmu_switch_to_host(void)
 {
-	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
+	struct kvm_pmu_events *pmu = &__hyp_this_cpu_ptr(kvm_host_data)->pmu_events;
 
 	if (pmu->events_guest)
 		write_sysreg(pmu->events_guest, pmcntenclr_el0);
@@ -229,11 +229,11 @@ static void __vcpu_switch_to(struct kvm_vcpu *vcpu)
 /* Switch to the guest for legacy non-VHE systems */
 int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 {
-	struct kvm_cpu_context *hyp_ctxt;
+	struct kvm_cpu_context *host_ctxt;
 	struct kvm_vcpu *running_vcpu;
 	u64 exit_code;
 
-	hyp_ctxt = __hyp_this_cpu_ptr(kvm_hyp_ctxt);
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 
 	if (running_vcpu != vcpu) {
@@ -255,7 +255,7 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	do {
 		/* Jump in the fire! */
-		exit_code = __guest_enter(vcpu, hyp_ctxt);
+		exit_code = __guest_enter(vcpu, host_ctxt);
 
 		/* And we're baaack! */
 	} while (fixup_guest_exit(vcpu, &exit_code));

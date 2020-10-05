@@ -28,8 +28,6 @@
 #include <asm/processor.h>
 #include <asm/thread_info.h>
 
-DECLARE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
-
 extern const char __hyp_panic_string[];
 
 extern struct exception_table_entry __start___kvm_ex_table;
@@ -388,7 +386,7 @@ static inline bool __hyp_handle_ptrauth(struct kvm_vcpu *vcpu)
 	    !esr_is_ptrauth_trap(kvm_vcpu_get_esr(vcpu)))
 		return false;
 
-	ctxt = get_hyp_ctxt();
+	ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	__ptrauth_save_key(ctxt, APIA);
 	__ptrauth_save_key(ctxt, APIB);
 	__ptrauth_save_key(ctxt, APDA);

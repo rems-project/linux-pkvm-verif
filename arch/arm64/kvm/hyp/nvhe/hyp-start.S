@@ -29,7 +29,7 @@ alternative_else_nop_endif
 .endm
 
 SYM_CODE_START(__kvm_hyp_start)
-	get_hyp_ctxt	x0, x1
+	get_host_ctxt	x0, x1
 
 	ptrauth_hyp_ctxt_init x0, x1, x2, x3
 

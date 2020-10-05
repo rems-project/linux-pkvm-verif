@@ -19,18 +19,18 @@
 
 /*
  * u64 __guest_enter(struct kvm_vcpu *vcpu,
- *		     struct kvm_cpu_context *hyp_ctxt);
+ *		     struct kvm_cpu_context *host_ctxt);
  */
 SYM_FUNC_START(__guest_enter)
 	// x0: vcpu
-	// x1: hyp context
+	// x1: host context
 	// x2-x17: clobbered by macros
 	// x29: guest context
 
-	// Store the hyp regs
+	// Store the host regs
 	save_callee_saved_regs x1
 
-	// Save the hyp's sp_el0
+	// Save the host's sp_el0
 	save_sp_el0	x1, x2
 
 	// Now the hyp state is stored if we have a pending RAS SError it must
@@ -113,7 +113,7 @@ SYM_INNER_LABEL(__guest_exit, SYM_L_GLOBAL)
 	// Store the guest's sp_el0
 	save_sp_el0	x1, x2
 
-	get_hyp_ctxt	x2, x3
+	get_host_ctxt	x2, x3
 
 	// Macro ptrauth_switch_to_guest format:
 	// 	ptrauth_switch_to_host(guest cxt, host cxt, tmp1, tmp2, tmp3)
@@ -122,10 +122,10 @@ SYM_INNER_LABEL(__guest_exit, SYM_L_GLOBAL)
 	// when this feature is enabled for kernel code.
 	ptrauth_switch_to_host x1, x2, x3, x4, x5
 
-	// Restore the hyp's sp_el0
+	// Restore the hosts's sp_el0
 	restore_sp_el0 x2, x3
 
-	// Now restore the hyp regs
+	// Now restore the host regs
 	restore_callee_saved_regs x2
 
 alternative_if ARM64_HAS_RAS_EXTN
