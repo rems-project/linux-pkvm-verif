@@ -11,101 +11,23 @@
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
 
-#include <kvm/arm_hypercalls.h>
-
-static void handle_host_hcall(unsigned long func_id, struct kvm_vcpu *host_vcpu)
-{
-	unsigned long ret = 0;
-
-	switch (func_id) {
-	case KVM_HOST_SMCCC_FUNC(__kvm_flush_vm_context):
-		__kvm_flush_vm_context();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_vmid_ipa): {
-			struct kvm_s2_mmu *mmu =
-				(struct kvm_s2_mmu *)smccc_get_arg1(host_vcpu);
-			phys_addr_t ipa = smccc_get_arg2(host_vcpu);
-			int level = smccc_get_arg3(host_vcpu);
-
-			__kvm_tlb_flush_vmid_ipa(mmu, ipa, level);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_vmid): {
-			struct kvm_s2_mmu *mmu =
-				(struct kvm_s2_mmu *)smccc_get_arg1(host_vcpu);
-
-			__kvm_tlb_flush_vmid(mmu);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_local_vmid): {
-			struct kvm_s2_mmu *mmu =
-				(struct kvm_s2_mmu *)smccc_get_arg1(host_vcpu);
-
-			__kvm_tlb_flush_local_vmid(mmu);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_timer_set_cntvoff): {
-			u64 cntvoff = smccc_get_arg1(host_vcpu);
-
-			__kvm_timer_set_cntvoff(cntvoff);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_vcpu_run): {
-			struct kvm_vcpu *vcpu =
-				(struct kvm_vcpu *)smccc_get_arg1(host_vcpu);
-
-			ret = __kvm_vcpu_run(vcpu);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_enable_ssbs):
-		__kvm_enable_ssbs();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_get_ich_vtr_el2):
-		ret = __vgic_v3_get_ich_vtr_el2();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_read_vmcr):
-		ret = __vgic_v3_read_vmcr();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_write_vmcr): {
-			u32 vmcr = smccc_get_arg1(host_vcpu);
-
-			__vgic_v3_write_vmcr(vmcr);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_init_lrs):
-		__vgic_v3_init_lrs();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__kvm_get_mdcr_el2):
-		ret = __kvm_get_mdcr_el2();
-		break;
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_save_aprs): {
-			struct vgic_v3_cpu_if *cpu_if =
-				(struct vgic_v3_cpu_if *)smccc_get_arg1(host_vcpu);
-
-			__vgic_v3_save_aprs(cpu_if);
-			break;
-		}
-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_restore_aprs): {
-			struct vgic_v3_cpu_if *cpu_if =
-				(struct vgic_v3_cpu_if *)smccc_get_arg1(host_vcpu);
-
-			__vgic_v3_restore_aprs(cpu_if);
-			break;
-		}
-	default:
-		/* Invalid host HVC. */
-		smccc_set_retval(host_vcpu, SMCCC_RET_NOT_SUPPORTED, 0, 0, 0);
-		return;
-	}
-
-	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, ret, 0, 0);
-}
+typedef unsigned long (*hypcall_fn_t)
+	(unsigned long, unsigned long, unsigned long);
 
 static void handle_trap(struct kvm_vcpu *host_vcpu) {
 	if (kvm_vcpu_trap_get_class(host_vcpu) == ESR_ELx_EC_HVC64) {
-		unsigned long func_id = smccc_get_function(host_vcpu);
+		hypcall_fn_t func;
+		unsigned long ret;
 
-		handle_host_hcall(func_id, host_vcpu);
+		/*
+		 * __kvm_call_hyp takes a pointer in the host address space and
+		 * up to three arguments.
+		 */
+		func = (hypcall_fn_t)kern_hyp_va(vcpu_get_reg(host_vcpu, 0));
+		ret = func(vcpu_get_reg(host_vcpu, 1),
+			   vcpu_get_reg(host_vcpu, 2),
+			   vcpu_get_reg(host_vcpu, 3));
+		vcpu_set_reg(host_vcpu, 0, ret);
 	}
 
 	/* Other traps are ignored. */
