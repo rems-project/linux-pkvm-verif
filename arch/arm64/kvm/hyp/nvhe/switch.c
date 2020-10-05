@@ -153,7 +153,6 @@ static void __pmu_switch_to_host(struct kvm_cpu_context *host_ctxt)
 }
 
 static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
-				       struct kvm_vcpu *host_vcpu,
 				       struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
@@ -171,7 +170,7 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
 
 	__pmu_switch_to_guest(host_ctxt);
 
-	__sysreg_save_state_nvhe(&host_vcpu->arch.ctxt);
+	__sysreg_save_state_nvhe(host_ctxt);
 
 	/*
 	 * We must restore the 32-bit state before the sysregs, thanks
@@ -207,7 +206,7 @@ static void __kvm_vcpu_switch_to_host(struct kvm_cpu_context *host_ctxt,
 	__deactivate_traps(vcpu);
 	__deactivate_vm(vcpu);
 
-	__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
+	__sysreg_restore_state_nvhe(host_ctxt);
 
 	if (vcpu->arch.flags & KVM_ARM64_FP_ENABLED)
 		__fpsimd_save_fpexc32(vcpu);
@@ -240,7 +239,7 @@ static void __vcpu_switch_to(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.ctxt.is_host)
 		__kvm_vcpu_switch_to_host(host_ctxt, vcpu, running_vcpu);
 	else
-		__kvm_vcpu_switch_to_guest(host_ctxt, running_vcpu, vcpu);
+		__kvm_vcpu_switch_to_guest(host_ctxt, vcpu);
 
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
@@ -289,15 +288,14 @@ void __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 	u64 spsr = read_sysreg_el2(SYS_SPSR);
 	u64 elr = read_sysreg_el2(SYS_ELR);
 	u64 par = read_sysreg(par_el1);
-	struct kvm_vcpu *host_vcpu = __hyp_this_cpu_ptr(kvm_host_vcpu);
 	struct kvm_vcpu *vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 	unsigned long str_va;
 
-	if (vcpu != host_vcpu) {
+	if (read_sysreg(vttbr_el2)) {
 		__timer_disable_traps(vcpu);
 		__deactivate_traps(vcpu);
 		__deactivate_vm(vcpu);
-		__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
+		__sysreg_restore_state_nvhe(host_ctxt);
 	}
 
 	/*
