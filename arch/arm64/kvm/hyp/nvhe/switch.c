@@ -4,7 +4,6 @@
  * Author: Marc Zyngier <marc.zyngier@arm.com>
  */
 
-#include <hyp/debug-sr.h>
 #include <hyp/switch.h>
 #include <hyp/sysreg-sr.h>
 
@@ -177,6 +176,8 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 	__activate_traps(vcpu);
 
 	__timer_enable_traps(vcpu);
+
+	__debug_switch_to_guest(host_vcpu, vcpu);
 }
 
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
@@ -189,6 +190,12 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 
 	__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 
+	/*
+	 * This must come after restoring the host sysregs, since a non-VHE
+	 * system may enable SPE here and make use of the TTBRs.
+	 */
+	__debug_switch_to_host(host_vcpu, vcpu);
+
 	__pmu_switch_to_host();
 
 	/* Returning to host will clear PSR.I, remask PMR if needed */
@@ -196,22 +203,16 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 		gic_write_pmr(GIC_PRIO_IRQOFF);
 }
 
-static void __vcpu_save_state(struct kvm_vcpu *vcpu, bool save_debug)
+static void __vcpu_save_state(struct kvm_vcpu *vcpu)
 {
 	__sysreg_save_state_nvhe(&vcpu->arch.ctxt);
 	__sysreg32_save_state(vcpu);
 	__hyp_vgic_save_state(vcpu);
 
 	__fpsimd_save_fpexc32(vcpu);
-
-	__debug_save_spe(vcpu);
-
-	if (save_debug)
-		__debug_save_state(kern_hyp_va(vcpu->arch.debug_ptr),
-				   &vcpu->arch.ctxt);
 }
 
-static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
+static void __vcpu_restore_state(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu *running_vcpu;
 
@@ -228,16 +229,6 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 
 	__hyp_vgic_restore_state(vcpu);
 
-	/*
-	 * This must come after restoring the sysregs since SPE may make use if
-	 * the TTBRs.
-	 */
-	__debug_restore_spe(vcpu);
-
-	if (restore_debug)
-		__debug_restore_state(kern_hyp_va(vcpu->arch.debug_ptr),
-				      &vcpu->arch.ctxt);
-
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
 
@@ -252,8 +243,6 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 
 	if (running_vcpu != vcpu) {
-		bool switch_debug;
-
 		if (!running_vcpu->arch.ctxt.is_host &&
 		    !vcpu->arch.ctxt.is_host) {
 			/*
@@ -265,11 +254,8 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 			return ARM_EXCEPTION_IRQ;
 		}
 
-		switch_debug = (vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY) &&
-			(running_vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY);
-
-		__vcpu_save_state(running_vcpu, switch_debug);
-		__vcpu_restore_state(vcpu, switch_debug);
+		__vcpu_save_state(running_vcpu);
+		__vcpu_restore_state(vcpu);
 	}
 
 	__set_vcpu_arch_workaround_state(vcpu);
