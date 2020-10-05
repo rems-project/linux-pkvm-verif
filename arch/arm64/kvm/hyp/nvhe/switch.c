@@ -200,7 +200,7 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	__debug_switch_to_guest(vcpu);
 
-	__set_vcpu_arch_workaround_state(vcpu);
+	__set_guest_arch_workaround_state(vcpu);
 
 	do {
 		/* Jump in the fire! */
@@ -209,7 +209,7 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 		/* And we're baaack! */
 	} while (fixup_guest_exit(vcpu, &exit_code));
 
-	__set_hyp_arch_workaround_state(vcpu);
+	__set_host_arch_workaround_state(vcpu);
 
 	__sysreg_save_state_nvhe(guest_ctxt);
 	__sysreg32_save_state(vcpu);
