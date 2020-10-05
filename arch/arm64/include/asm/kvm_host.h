@@ -249,7 +249,7 @@ struct kvm_cpu_context {
 		u32 copro[NR_COPRO_REGS];
 	};
 
-	bool is_host;
+	struct kvm_vcpu *__hyp_running_vcpu;
 };
 
 struct kvm_pmu_events {
@@ -569,8 +569,6 @@ DECLARE_PER_CPU(kvm_host_data_t, kvm_host_data);
 
 static inline void kvm_init_host_cpu_context(struct kvm_cpu_context *cpu_ctxt)
 {
-	cpu_ctxt->is_host = true;
-
 	/* The host's MPIDR is immutable, so let's set it up at boot time */
 	ctxt_sys_reg(cpu_ctxt, MPIDR_EL1) = read_cpuid_mpidr();
 }

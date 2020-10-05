@@ -12,8 +12,6 @@
 #include <asm/alternative.h>
 #include <asm/sysreg.h>
 
-DECLARE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
-
 #define read_sysreg_elx(r,nvh,vh)					\
 	({								\
 		u64 reg;						\

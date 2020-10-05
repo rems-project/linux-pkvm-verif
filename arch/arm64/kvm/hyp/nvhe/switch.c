@@ -176,7 +176,7 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 	vcpu = kern_hyp_va(vcpu);
 
 	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
-	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
+	host_ctxt->__hyp_running_vcpu = vcpu;
 	guest_ctxt = &vcpu->arch.ctxt;
 
 	pmu_switch_needed = __pmu_switch_to_guest(host_ctxt);
@@ -247,7 +247,7 @@ void __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 	u64 spsr = read_sysreg_el2(SYS_SPSR);
 	u64 elr = read_sysreg_el2(SYS_ELR);
 	u64 par = read_sysreg(par_el1);
-	struct kvm_vcpu *vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
+	struct kvm_vcpu *vcpu = host_ctxt->__hyp_running_vcpu;
 	unsigned long str_va;
 
 	if (read_sysreg(vttbr_el2)) {
