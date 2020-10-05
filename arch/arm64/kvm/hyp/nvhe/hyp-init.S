@@ -16,9 +16,6 @@
 #include <asm/sysreg.h>
 #include <asm/virt.h>
 
-#include <asm/kvm_asm.h>
-#include <asm/kvm_ptrauth.h>
-
 	.text
 	.pushsection	.hyp.idmap.text, "ax"
 
@@ -141,7 +138,6 @@ SYM_CODE_START(__kvm_handle_stub_hvc)
 	cmp	x0, #HVC_SOFT_RESTART
 	b.ne	1f
 
-SYM_INNER_LABEL(__kvm_handle_stub_hvc_soft_restart, SYM_L_GLOBAL)
 	/* This is where we're about to jump, staying at EL2 */
 	msr	elr_el2, x1
 	mov	x0, #(PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT | PSR_MODE_EL2h)
@@ -151,18 +147,11 @@ SYM_INNER_LABEL(__kvm_handle_stub_hvc_soft_restart, SYM_L_GLOBAL)
 	mov	x0, x2
 	mov	x1, x3
 	mov	x2, x4
-	b	2f
+	b	reset
 
 1:	cmp	x0, #HVC_RESET_VECTORS
 	b.ne	1f
 
-SYM_INNER_LABEL(__kvm_handle_stub_hvc_reset_vectors, SYM_L_GLOBAL)
-	/* Restore host's ptrauth, sp_el0 and callee saved regs */
-	ptrauth_switch_to_guest x5, x6, x7, x8
-	restore_sp_el0 x5, x6
-	restore_callee_saved_regs x5
-
-2:
 	/*
 	 * Set the HVC_RESET_VECTORS return code before entering the common
 	 * path so that we do not clobber x0-x2 in case we are coming via

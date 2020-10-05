@@ -41,20 +41,50 @@
 
 	.text
 
-el1_sync:
+el1_sync:				// Guest trapped into EL2
+
 	mrs	x0, esr_el2
 	lsr	x0, x0, #ESR_ELx_EC_SHIFT
 	cmp	x0, #ESR_ELx_EC_HVC64
 	ccmp	x0, #ESR_ELx_EC_HVC32, #4, ne
 	b.ne	el1_trap
 
+#ifdef __KVM_NVHE_HYPERVISOR__
+	mrs	x1, vttbr_el2		// If vttbr is valid, the guest
+	cbnz	x1, el1_hvc_guest	// called HVC
+
+	/* Here, we're pretty sure the host called HVC. */
+	ldp	x0, x1, [sp]
+
+	/* Check for a stub HVC call */
+	cmp	x0, #HVC_STUB_HCALL_NR
+	b.hs	el1_trap
+	add	sp, sp, #16
+
+	/*
+	 * Compute the idmap address of __kvm_handle_stub_hvc and
+	 * jump there. Since we use kimage_voffset, do not use the
+	 * HYP VA for __kvm_handle_stub_hvc, but the kernel VA instead
+	 * (by loading it from the constant pool).
+	 *
+	 * Preserve x0-x4, which may contain stub parameters.
+	 */
+	ldr	x5, =__kvm_handle_stub_hvc
+	ldr_l	x6, kimage_voffset
+
+	/* x5 = __pa(x5) */
+	sub	x5, x5, x6
+	br	x5
+#endif /* __KVM_NVHE_HYPERVISOR__ */
+
+el1_hvc_guest:
 	/*
 	 * Fastest possible path for ARM_SMCCC_ARCH_WORKAROUND_1.
 	 * The workaround has already been applied on the host,
 	 * so let's quickly get back to the guest. We don't bother
 	 * restoring x1, as it can be clobbered anyway.
 	 */
-	ldr	x1, [sp]				// vcpu's x0
+	ldr	x1, [sp]				// Guest's x0
 	eor	w1, w1, #ARM_SMCCC_ARCH_WORKAROUND_1
 	cbz	w1, wa_epilogue
 
@@ -71,7 +101,7 @@ alternative_cb_end
 	ldr	x0, [x2, #VCPU_WORKAROUND_FLAGS]
 
 	// Sanitize the argument and update the guest flags
-	ldr	x1, [sp, #8]			// vcpu's x1
+	ldr	x1, [sp, #8]			// Guest's x1
 	clz	w1, w1				// Murphy's device:
 	lsr	w1, w1, #5			// w1 = !!w1 without using
 	eor	w1, w1, #1			// the flags...

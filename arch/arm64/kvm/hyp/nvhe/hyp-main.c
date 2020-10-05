@@ -13,51 +13,6 @@
 
 #include <kvm/arm_hypercalls.h>
 
-typedef __noreturn unsigned long (*stub_hvc_handler_t)
-	(unsigned long, unsigned long, unsigned long, unsigned long,
-	 unsigned long, struct kvm_cpu_context *);
-
-extern char __kvm_handle_stub_hvc_soft_restart[];
-extern char __kvm_handle_stub_hvc_reset_vectors[];
-
-static void handle_stub_hvc(unsigned long func_id, struct kvm_vcpu *host_vcpu)
-{
-	char *stub_hvc_handler_kern_va;
-	stub_hvc_handler_t stub_hvc_handler;
-
-	/*
-	 * The handlers of the supported stub HVCs disable the MMU so they must
-	 * be called in the idmap. We compute the idmap address by subtracting
-	 * kimage_voffset from the kernel VA handler.
-	 */
-	switch (func_id) {
-	case HVC_SOFT_RESTART:
-		asm volatile("ldr %0, =%1"
-			     : "=r" (stub_hvc_handler_kern_va)
-			     : "S" (__kvm_handle_stub_hvc_soft_restart));
-		break;
-	case HVC_RESET_VECTORS:
-		asm volatile("ldr %0, =%1"
-			     : "=r" (stub_hvc_handler_kern_va)
-			     : "S" (__kvm_handle_stub_hvc_reset_vectors));
-		break;
-	default:
-		vcpu_set_reg(host_vcpu, 0, HVC_STUB_ERR);
-		return;
-	}
-
-	stub_hvc_handler = (stub_hvc_handler_t)
-		(stub_hvc_handler_kern_va - kimage_voffset);
-
-	/* Preserve x0-x4, which may contain stub parameters. */
-	stub_hvc_handler(func_id,
-			 vcpu_get_reg(host_vcpu, 1),
-			 vcpu_get_reg(host_vcpu, 2),
-			 vcpu_get_reg(host_vcpu, 3),
-			 vcpu_get_reg(host_vcpu, 4),
-			 &host_vcpu->arch.ctxt);
-}
-
 static void handle_host_hcall(unsigned long func_id, struct kvm_vcpu *host_vcpu)
 {
 	unsigned long ret = 0;
@@ -150,10 +105,7 @@ static void handle_trap(struct kvm_vcpu *host_vcpu) {
 	if (kvm_vcpu_trap_get_class(host_vcpu) == ESR_ELx_EC_HVC64) {
 		unsigned long func_id = smccc_get_function(host_vcpu);
 
-		if (func_id < HVC_STUB_HCALL_NR)
-			handle_stub_hvc(func_id, host_vcpu);
-		else
-			handle_host_hcall(func_id, host_vcpu);
+		handle_host_hcall(func_id, host_vcpu);
 	}
 
 	/* Other traps are ignored. */
