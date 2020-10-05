@@ -14,8 +14,6 @@
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
 
-DEFINE_PER_CPU(u64, kvm_host_pmscr_el1);
-
 void __debug_save_spe(struct kvm_vcpu *vcpu)
 {
 	u64 reg;

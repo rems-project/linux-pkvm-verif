@@ -28,9 +28,6 @@
 #include <asm/processor.h>
 #include <asm/thread_info.h>
 
-DEFINE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
-DEFINE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
-
 static void __activate_traps(struct kvm_vcpu *vcpu)
 {
 	u64 val;
