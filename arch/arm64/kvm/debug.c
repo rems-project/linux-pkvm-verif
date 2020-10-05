@@ -209,8 +209,6 @@ void kvm_arm_clear_debug(struct kvm_vcpu *vcpu)
 {
 	trace_kvm_arm_clear_debug(vcpu->guest_debug);
 
-	vcpu->arch.flags &= ~KVM_ARM64_DEBUG_DIRTY;
-
 	if (vcpu->guest_debug) {
 		restore_guest_debug_regs(vcpu);
 
