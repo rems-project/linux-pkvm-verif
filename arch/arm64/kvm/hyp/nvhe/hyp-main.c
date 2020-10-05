@@ -115,8 +115,10 @@ void __noreturn kvm_hyp_main(void)
 {
 	/* Set tpidr_el2 for use by HYP */
 	struct kvm_vcpu *host_vcpu;
+	struct kvm_cpu_context *hyp_ctxt;
 
 	host_vcpu = __hyp_this_cpu_ptr(kvm_host_vcpu);
+	hyp_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 
 	kvm_init_host_cpu_context(&host_vcpu->arch.ctxt);
 
@@ -129,14 +131,24 @@ void __noreturn kvm_hyp_main(void)
 	 */
 	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, 0, 0, 0);
 
-	/* The host is already loaded so note it as the running vcpu. */
-	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = host_vcpu;
-
 	while (true) {
 		u64 exit_code;
 
-		/* Enter the host now that we feel like we're in charge. */
-		exit_code = __kvm_vcpu_run(host_vcpu);
+		/*
+		 * Set the running cpu for the vectors to pass to __guest_exit
+		 * so it can get the cpu context.
+		 */
+		*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = host_vcpu;
+
+		/*
+		 * Enter the host now that we feel like we're in charge.
+		 *
+		 * This should merge with __kvm_vcpu_run as host becomes more
+		 * vcpu-like.
+		 */
+		do {
+			exit_code = __guest_enter(host_vcpu, hyp_ctxt);
+		} while (fixup_guest_exit(host_vcpu, &exit_code));
 
 		switch (ARM_EXCEPTION_CODE(exit_code)) {
 		case ARM_EXCEPTION_TRAP:

@@ -119,7 +119,7 @@ static void __hyp_vgic_restore_state(struct kvm_vcpu *vcpu)
 /**
  * Disable host events, enable guest events
  */
-static void __pmu_switch_to_guest(struct kvm_cpu_context *host_ctxt)
+static bool __pmu_switch_to_guest(struct kvm_cpu_context *host_ctxt)
 {
 	struct kvm_host_data *host;
 	struct kvm_pmu_events *pmu;
@@ -132,6 +132,8 @@ static void __pmu_switch_to_guest(struct kvm_cpu_context *host_ctxt)
 
 	if (pmu->events_guest)
 		write_sysreg(pmu->events_guest, pmcntenset_el0);
+
+	return (pmu->events_host || pmu->events_guest);
 }
 
 /**
@@ -152,10 +154,13 @@ static void __pmu_switch_to_host(struct kvm_cpu_context *host_ctxt)
 		write_sysreg(pmu->events_host, pmcntenset_el0);
 }
 
-static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
-				       struct kvm_vcpu *vcpu)
+/* Switch to the guest for legacy non-VHE systems */
+int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 {
-	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
+	struct kvm_cpu_context *host_ctxt;
+	struct kvm_cpu_context *guest_ctxt;
+	bool pmu_switch_needed;
+	u64 exit_code;
 
 	/*
 	 * Having IRQs masked via PMR when entering the guest means the GIC
@@ -168,7 +173,11 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
 		pmr_sync();
 	}
 
-	__pmu_switch_to_guest(host_ctxt);
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
+	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
+	guest_ctxt = &vcpu->arch.ctxt;
+
+	pmu_switch_needed = __pmu_switch_to_guest(host_ctxt);
 
 	__sysreg_save_state_nvhe(host_ctxt);
 
@@ -190,13 +199,17 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
 	__timer_enable_traps(vcpu);
 
 	__debug_switch_to_guest(vcpu);
-}
 
-static void __kvm_vcpu_switch_to_host(struct kvm_cpu_context *host_ctxt,
-				      struct kvm_vcpu *host_vcpu,
-				      struct kvm_vcpu *vcpu)
-{
-	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
+	__set_vcpu_arch_workaround_state(vcpu);
+
+	do {
+		/* Jump in the fire! */
+		exit_code = __guest_enter(vcpu, host_ctxt);
+
+		/* And we're baaack! */
+	} while (fixup_guest_exit(vcpu, &exit_code));
+
+	__set_hyp_arch_workaround_state(vcpu);
 
 	__sysreg_save_state_nvhe(guest_ctxt);
 	__sysreg32_save_state(vcpu);
@@ -217,68 +230,12 @@ static void __kvm_vcpu_switch_to_host(struct kvm_cpu_context *host_ctxt,
 	 */
 	__debug_switch_to_host(vcpu);
 
-	__pmu_switch_to_host(host_ctxt);
+	if (pmu_switch_needed)
+		__pmu_switch_to_host(host_ctxt);
 
 	/* Returning to host will clear PSR.I, remask PMR if needed */
 	if (system_uses_irq_prio_masking())
 		gic_write_pmr(GIC_PRIO_IRQOFF);
-}
-
-static void __vcpu_switch_to(struct kvm_vcpu *vcpu)
-{
-	struct kvm_cpu_context *host_ctxt;
-	struct kvm_vcpu *running_vcpu;
-
-	/*
-	 * Restoration is not yet pure so it still makes use of the previously
-	 * running vcpu.
-	 */
-	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
-	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
-
-	if (vcpu->arch.ctxt.is_host)
-		__kvm_vcpu_switch_to_host(host_ctxt, vcpu, running_vcpu);
-	else
-		__kvm_vcpu_switch_to_guest(host_ctxt, vcpu);
-
-	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
-}
-
-/* Switch to the guest for legacy non-VHE systems */
-int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
-{
-	struct kvm_cpu_context *host_ctxt;
-	struct kvm_vcpu *running_vcpu;
-	u64 exit_code;
-
-	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
-	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
-
-	if (running_vcpu != vcpu) {
-		if (!running_vcpu->arch.ctxt.is_host &&
-		    !vcpu->arch.ctxt.is_host) {
-			/*
-			 * There are still assumptions that the switch will
-			 * always be between a guest and the host so double
-			 * check that is the case. If it isn't, pretending
-			 * there was an interrupt is a harmless way to bail.
-			 */
-			return ARM_EXCEPTION_IRQ;
-		}
-
-		__vcpu_switch_to(vcpu);
-	}
-
-	__set_vcpu_arch_workaround_state(vcpu);
-
-	do {
-		/* Jump in the fire! */
-		exit_code = __guest_enter(vcpu, host_ctxt);
-
-		/* And we're baaack! */
-	} while (fixup_guest_exit(vcpu, &exit_code));
-
-	__set_hyp_arch_workaround_state(vcpu);
 
 	return exit_code;
 }
