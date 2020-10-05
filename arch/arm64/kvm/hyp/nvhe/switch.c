@@ -33,10 +33,6 @@ DEFINE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
 DEFINE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
 DEFINE_PER_CPU(struct kvm_pmu_events, kvm_pmu_events);
 
-#ifdef CONFIG_ARM64_SSBD
-DEFINE_PER_CPU_READ_MOSTLY(u64, arm64_ssbd_callback_required);
-#endif
-
 static void __activate_traps(struct kvm_vcpu *vcpu)
 {
 	u64 val;
