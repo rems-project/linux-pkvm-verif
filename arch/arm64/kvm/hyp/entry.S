@@ -174,31 +174,18 @@ alternative_if ARM64_HAS_RAS_EXTN
 	mrs_s	x2, SYS_DISR_EL1
 	str	x2, [x1, #(VCPU_FAULT_DISR - VCPU_CONTEXT)]
 	cbz	x2, 1f
+	msr_s	SYS_DISR_EL1, xzr
 	orr	x0, x0, #(1<<ARM_EXIT_WITH_SERROR_BIT)
-	nop
-1:
+1:	ret
 alternative_else
 	dsb	sy		// Synchronize against in-flight ld/st
 	isb			// Prevent an early read of side-effect free ISR
 	mrs	x2, isr_el1
-	tbz	x2, #8, 2f	// ISR_EL1.A
-	orr	x0, x0, #(1<<ARM_EXIT_WITH_SERROR_BIT)
+	tbnz	x2, #8, 2f	// ISR_EL1.A
+	ret
+	nop
 2:
 alternative_endif
-
-	ret
-SYM_FUNC_END(__guest_enter)
-
-/*
- * void __handle_sei(void);
- */
-SYM_FUNC_START(__handle_sei)
-
-alternative_if ARM64_HAS_RAS_EXTN
-	msr_s	SYS_DISR_EL1, xzr
-	ret
-alternative_else_nop_endif
-
 	// We know we have a pending asynchronous abort, now is the
 	// time to flush it out. From your VAXorcist book, page 666:
 	// "Threaten me not, oh Evil one!  For I speak with
@@ -206,6 +193,7 @@ alternative_else_nop_endif
 	mrs	x2, elr_el2
 	mrs	x3, esr_el2
 	mrs	x4, spsr_el2
+	mov	x5, x0
 
 	msr	daifclr, #4	// Unmask aborts
 
@@ -225,11 +213,13 @@ abort_guest_exit_end:
 	_kvm_extable	abort_guest_exit_end, 9997f
 9997:
 	msr	daifset, #4	// Mask aborts
+	mov	x0, #(1 << ARM_EXIT_WITH_SERROR_BIT)
 
 	// restore the EL1 exception context so that we can report some
 	// information. Merge the exception code with the SError pending bit.
 	msr	elr_el2, x2
 	msr	esr_el2, x3
 	msr	spsr_el2, x4
-	ret
-SYM_FUNC_END(__handle_sei)
+	orr	x0, x0, x5
+1:	ret
+SYM_FUNC_END(__guest_enter)
