@@ -67,7 +67,7 @@ static void __deactivate_traps(struct kvm_vcpu *vcpu)
 {
 	extern char vectors[];	/* kernel exception vectors */
 
-	__save_traps(vcpu);
+	___deactivate_traps(vcpu);
 
 	write_sysreg(HCR_HOST_VHE_FLAGS, hcr_el2);
 

@@ -45,21 +45,15 @@ static void __activate_traps(struct kvm_vcpu *vcpu)
 	write_sysreg(val, cptr_el2);
 }
 
-static void __deactivate_traps(struct kvm_vcpu *host_vcpu)
+static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
 {
+	___deactivate_traps(vcpu);
+
 	__deactivate_traps_common();
 
 	write_sysreg(host_vcpu->arch.mdcr_el2, mdcr_el2);
 	write_sysreg(host_vcpu->arch.hcr_el2, hcr_el2);
 	write_sysreg(CPTR_EL2_DEFAULT, cptr_el2);
-}
-
-static void __restore_traps(struct kvm_vcpu *vcpu)
-{
-	if (vcpu->arch.ctxt.is_host)
-		__deactivate_traps(vcpu);
-	else
-		__activate_traps(vcpu);
 }
 
 static void __restore_stage2(struct kvm_vcpu *vcpu)
@@ -140,7 +134,6 @@ static void __vcpu_save_state(struct kvm_vcpu *vcpu, bool save_debug)
 
 	__fpsimd_save_fpexc32(vcpu);
 
-	__save_traps(vcpu);
 	__debug_save_spe(vcpu);
 
 	if (save_debug)
@@ -150,6 +143,14 @@ static void __vcpu_save_state(struct kvm_vcpu *vcpu, bool save_debug)
 
 static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 {
+	struct kvm_vcpu *running_vcpu;
+
+	/*
+	 * Restoration is not yet pure so it still makes use of the previously
+	 * running vcpu.
+	 */
+	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
+
 	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
 		u64 val;
 
@@ -178,7 +179,10 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 	__sysreg32_restore_state(vcpu);
 	__sysreg_restore_state_nvhe(&vcpu->arch.ctxt);
 
-	__restore_traps(vcpu);
+	if (vcpu->arch.ctxt.is_host)
+		__deactivate_traps(vcpu, running_vcpu);
+	else
+		__activate_traps(vcpu);
 
 	__hyp_vgic_restore_state(vcpu);
 	__timer_restore_traps(vcpu);
@@ -256,7 +260,7 @@ void __noreturn hyp_panic(void)
 
 	if (vcpu != host_vcpu) {
 		__timer_restore_traps(host_vcpu);
-		__restore_traps(host_vcpu);
+		__deactivate_traps(host_vcpu, vcpu);
 		__restore_stage2(host_vcpu);
 		__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 	}
