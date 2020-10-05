@@ -27,7 +27,6 @@
 #include <asm/thread_info.h>
 
 DEFINE_PER_CPU(struct kvm_vcpu *, kvm_hyp_running_vcpu);
-DEFINE_PER_CPU(struct kvm_pmu_events, kvm_pmu_events);
 
 const char __hyp_panic_string[] = "HYP panic:\nPS:%08llx PC:%016llx ESR:%08llx\nFAR:%016llx HPFAR:%016llx PAR:%016llx\nVCPU:%p\n";
 

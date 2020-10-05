@@ -552,6 +552,8 @@ void kvm_set_sei_esr(struct kvm_vcpu *vcpu, u64 syndrome);
 
 struct kvm_vcpu *kvm_mpidr_to_vcpu(struct kvm *kvm, unsigned long mpidr);
 
+DECLARE_PER_CPU(struct kvm_pmu_events, kvm_pmu_events);
+
 static inline void kvm_init_host_cpu_context(struct kvm_cpu_context *cpu_ctxt)
 {
 	cpu_ctxt->is_host = true;
