@@ -13,6 +13,8 @@
 #include <asm/kvm_asm.h>
 #include <asm/kvm_ptrauth.h>
 
+#define CPU_LR_OFFSET (CPU_USER_PT_REGS + (8 * 30))
+
 /*
  * Initialize ptrauth in the hyp ctxt by populating it with the keys of the
  * host, which are the keys currently installed.
