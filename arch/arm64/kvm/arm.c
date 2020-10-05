@@ -1645,7 +1645,7 @@ static int init_hyp_mode(void)
 		goto out_err;
 	}
 
-	/* XXX - use RW mappings to allow writing in __kvm_bp_vect_base */
+	/* XXX - why turn RW again? */
 	err = create_hyp_mappings(kvm_ksym_ref(__hyp_bss_end),
 				  kvm_ksym_ref(__bss_stop), PAGE_HYP);
 	if (err) {

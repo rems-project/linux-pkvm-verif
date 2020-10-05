@@ -96,6 +96,9 @@ KVM_NVHE_ALIAS(cpu_hwcaps);
 KVM_NVHE_ALIAS(vgic_v2_cpuif_trap);
 KVM_NVHE_ALIAS(vgic_v3_cpuif_trap);
 
+/* KVM EL2 vector base address */
+KVM_NVHE_ALIAS(__kvm_bp_vect_base);
+
 /* Static key checked in pmr_sync(). */
 #ifdef CONFIG_ARM64_PSEUDO_NMI
 KVM_NVHE_ALIAS(gic_pmr_sync);
