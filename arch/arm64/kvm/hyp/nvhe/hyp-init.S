@@ -114,6 +114,7 @@ alternative_else_nop_endif
 	isb
 
 	/* Set the stack and new vectors */
+	kern_hyp_va	x1
 	mov	sp, x1
 	msr	vbar_el2, x2
 
