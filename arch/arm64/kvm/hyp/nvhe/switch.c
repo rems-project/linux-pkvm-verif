@@ -88,22 +88,32 @@ static void __hyp_vgic_restore_state(struct kvm_vcpu *vcpu)
 	}
 }
 
-static void __pmu_restore(struct kvm_vcpu *vcpu)
+/**
+ * Disable host events, enable guest events
+ */
+static void __pmu_switch_to_guest(void)
 {
 	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
-	u32 clr;
-	u32 set;
 
-	if (vcpu->arch.ctxt.is_host) {
-		clr = pmu->events_guest;
-		set = pmu->events_host;
-	} else {
-		clr = pmu->events_host;
-		set = pmu->events_guest;
-	}
+	if (pmu->events_host)
+		write_sysreg(pmu->events_host, pmcntenclr_el0);
 
-	write_sysreg(clr, pmcntenclr_el0);
-	write_sysreg(set, pmcntenset_el0);
+	if (pmu->events_guest)
+		write_sysreg(pmu->events_guest, pmcntenset_el0);
+}
+
+/**
+ * Disable guest events, enable host events
+ */
+static void __pmu_switch_to_host(void)
+{
+	struct kvm_pmu_events *pmu = __hyp_this_cpu_ptr(kvm_pmu_events);
+
+	if (pmu->events_guest)
+		write_sysreg(pmu->events_guest, pmcntenclr_el0);
+
+	if (pmu->events_host)
+		write_sysreg(pmu->events_host, pmcntenset_el0);
 }
 
 static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
@@ -119,11 +129,15 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 		gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
 		pmr_sync();
 	}
+
+	__pmu_switch_to_guest();
 }
 
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
+	__pmu_switch_to_host();
+
 	/* Returning to host will clear PSR.I, remask PMR if needed */
 	if (system_uses_irq_prio_masking())
 		gic_write_pmr(GIC_PRIO_IRQOFF);
@@ -204,8 +218,6 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 	if (restore_debug)
 		__debug_restore_state(kern_hyp_va(vcpu->arch.debug_ptr),
 				      &vcpu->arch.ctxt);
-
-	__pmu_restore(vcpu);
 
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
