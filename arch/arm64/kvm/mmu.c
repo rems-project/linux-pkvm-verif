@@ -88,43 +88,6 @@ static bool kvm_is_device_pfn(unsigned long pfn)
 	return !pfn_valid(pfn);
 }
 
-static void *stage2_memcache_alloc_page(void *arg)
-{
-	struct kvm_mmu_memory_cache *mc = arg;
-	kvm_pte_t *ptep = NULL;
-
-	/* Allocated with GFP_PGTABLE_USER, so no need to zero */
-	if (mc && mc->nobjs)
-		ptep = mc->objects[--mc->nobjs];
-
-	return ptep;
-}
-
-static void *kvm_host_zalloc_pages_exact(size_t size)
-{
-	return alloc_pages_exact(size, GFP_KERNEL | __GFP_ZERO);
-}
-
-static void kvm_host_get_page(void *addr)
-{
-	get_page(virt_to_page(addr));
-}
-
-static void kvm_host_put_page(void *addr)
-{
-	put_page(virt_to_page(addr));
-}
-
-static phys_addr_t kvm_host_pa(void *addr)
-{
-	return __pa(addr);
-}
-
-static void *kvm_host_va(phys_addr_t phys)
-{
-	return __va(phys);
-}
-
 /*
  * Unmapping vs dcache management:
  *
@@ -425,16 +388,6 @@ int create_hyp_exec_mappings(phys_addr_t phys_addr, size_t size,
 	return 0;
 }
 
-static struct kvm_pgtable_mm_ops kvm_s2_mm_ops = {
-	.zalloc_page		= stage2_memcache_alloc_page,
-	.zalloc_pages_exact	= kvm_host_zalloc_pages_exact,
-	.free_pages_exact	= free_pages_exact,
-	.get_page		= kvm_host_get_page,
-	.put_page		= kvm_host_put_page,
-	.phys_to_virt		= kvm_host_va,
-	.virt_to_phys		= kvm_host_pa,
-};
-
 /**
  * kvm_init_stage2_mmu - Initialise a S2 MMU strucrure
  * @kvm:	The pointer to the KVM structure
@@ -458,7 +411,7 @@ int kvm_init_stage2_mmu(struct kvm *kvm, struct kvm_s2_mmu *mmu)
 	if (!pgt)
 		return -ENOMEM;
 
-	err = kvm_pgtable_stage2_init(pgt, kvm, &kvm_s2_mm_ops);
+	err = kvm_pgtable_stage2_init(pgt, kvm);
 	if (err)
 		goto out_free_pgtable;
 
@@ -1258,19 +1211,6 @@ static int kvm_map_idmap_text(void)
 	return err;
 }
 
-static void *kvm_hyp_zalloc_page(void *arg)
-{
-	return (void*)get_zeroed_page(GFP_KERNEL);
-}
-
-static struct kvm_pgtable_mm_ops kvm_hyp_mm_ops = {
-	.zalloc_page		= kvm_hyp_zalloc_page,
-	.get_page		= kvm_host_get_page,
-	.put_page		= kvm_host_put_page,
-	.phys_to_virt		= kvm_host_va,
-	.virt_to_phys		= kvm_host_pa,
-};
-
 int kvm_mmu_init(void)
 {
 	int err;
@@ -1314,7 +1254,7 @@ int kvm_mmu_init(void)
 		goto out;
 	}
 
-	err = kvm_pgtable_hyp_init(hyp_pgtable, hyp_va_bits, &kvm_hyp_mm_ops);
+	err = kvm_pgtable_hyp_init(hyp_pgtable, hyp_va_bits);
 	if (err)
 		goto out_free_pgtable;
 
