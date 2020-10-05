@@ -59,7 +59,7 @@ static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu
 static void __restore_stage2(struct kvm_vcpu *vcpu)
 {
 	if (vcpu->arch.hcr_el2 & HCR_VM)
-		__load_guest_stage2(kern_hyp_va(vcpu->arch.hw_mmu));
+		__activate_vm(kern_hyp_va(vcpu->arch.hw_mmu));
 	else
 		write_sysreg(0, vttbr_el2);
 }
