@@ -1270,7 +1270,6 @@ static void cpu_init_hyp_mode(void)
 	unsigned long vector_ptr;
 	unsigned long start_hyp;
 	unsigned long tpidr_el2;
-	struct arm_smccc_res res;
 
 	/* Switch from the HYP stub to our own HYP init vector */
 	__hyp_set_vectors(kvm_get_idmap_vector());
@@ -1296,10 +1295,8 @@ static void cpu_init_hyp_mode(void)
 	 * cpus_have_const_cap() wrapper.
 	 */
 	BUG_ON(!system_capabilities_finalized());
-	arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__kvm_hyp_init),
-			  pgd_ptr, tpidr_el2, start_hyp, hyp_stack_ptr,
-			  vector_ptr, &res);
-	WARN_ON(res.a0 != SMCCC_RET_SUCCESS);
+	__kvm_call_hyp_init(pgd_ptr, hyp_stack_ptr, vector_ptr, start_hyp,
+			    tpidr_el2);
 
 	/*
 	 * Disabling SSBD on a non-VHE system requires us to enable SSBS

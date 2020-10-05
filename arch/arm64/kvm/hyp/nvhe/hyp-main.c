@@ -125,12 +125,6 @@ void __noreturn kvm_hyp_main(void)
 	host_vcpu->arch.flags = KVM_ARM64_HOST_VCPU_FLAGS;
 	host_vcpu->arch.workaround_flags = VCPU_WORKAROUND_2_FLAG;
 
-	/*
-	 * The first time entering the host is seen by the host as the return
-	 * of the initialization HVC so mark it as successful.
-	 */
-	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, 0, 0, 0);
-
 	while (true) {
 		u64 exit_code;
 
