@@ -178,6 +178,7 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
+	__sysreg32_save_state(vcpu);
 	__timer_disable_traps(vcpu);
 	__hyp_vgic_save_state(vcpu);
 
@@ -205,7 +206,6 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 static void __vcpu_save_state(struct kvm_vcpu *vcpu)
 {
 	__sysreg_save_state_nvhe(&vcpu->arch.ctxt);
-	__sysreg32_save_state(vcpu);
 }
 
 static void __vcpu_restore_state(struct kvm_vcpu *vcpu)
