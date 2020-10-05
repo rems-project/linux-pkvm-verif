@@ -75,6 +75,25 @@ static inline void __sysreg_restore_el1_state(struct kvm_cpu_context *ctxt)
 {
 	write_sysreg(ctxt_sys_reg(ctxt, MPIDR_EL1),	vmpidr_el2);
 	write_sysreg(ctxt_sys_reg(ctxt, CSSELR_EL1),	csselr_el1);
+
+	if (has_vhe() ||
+	    !cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
+		write_sysreg_el1(ctxt_sys_reg(ctxt, SCTLR_EL1),	SYS_SCTLR);
+		write_sysreg_el1(ctxt_sys_reg(ctxt, TCR_EL1),	SYS_TCR);
+	} else	if (!ctxt->is_host) {
+		/*
+		 * Must only be done for guest registers, hence the context
+		 * test. Pairs with nVHE's __activate_traps().
+		 */
+		write_sysreg_el1((ctxt_sys_reg(ctxt, TCR_EL1) |
+				  TCR_EPD1_MASK | TCR_EPD0_MASK),
+				 SYS_TCR);
+		isb();
+		write_sysreg_el1(ctxt->sys_regs[SCTLR_EL1] | SCTLR_ELx_M,
+				 SYS_SCTLR);
+		isb();
+	}
+
 	write_sysreg_el1(ctxt_sys_reg(ctxt, CPACR_EL1),	SYS_CPACR);
 	write_sysreg_el1(ctxt_sys_reg(ctxt, TTBR0_EL1),	SYS_TTBR0);
 	write_sysreg_el1(ctxt_sys_reg(ctxt, TTBR1_EL1),	SYS_TTBR1);
@@ -90,24 +109,23 @@ static inline void __sysreg_restore_el1_state(struct kvm_cpu_context *ctxt)
 	write_sysreg(ctxt_sys_reg(ctxt, PAR_EL1),	par_el1);
 	write_sysreg(ctxt_sys_reg(ctxt, TPIDR_EL1),	tpidr_el1);
 
-	if (!has_vhe()) {
+	if (!has_vhe() &&
+	    cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT) &&
+	    ctxt->is_host) {
 		/*
-		 * For CPUs that are affected by the speculative AT errata,
-		 * ensure the vcpu's stage 1 and stage 2 translations have been
-		 * configured before before updating TCR_EL1 and SCTLR_EL1 to
-		 * potentially allow any speculative walks to occur. The stage
-		 * 2 will have already been configured by the nVHE switching
-		 * code before calling this function.
+		 * Must only be done for host registers, hence the context
+		 * test. Pairs with nVHE's __deactivate_traps().
 		 */
-		asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_SPECULATIVE_AT));
+		isb();
+		/*
+		 * At this stage, and thanks to the above isb(), S2 is
+		 * deconfigured and disabled. We can now restore the host's
+		 * S1 configuration: SCTLR, and only then TCR.
+		 */
+		write_sysreg_el1(ctxt_sys_reg(ctxt, SCTLR_EL1),	SYS_SCTLR);
+		isb();
+		write_sysreg_el1(ctxt_sys_reg(ctxt, TCR_EL1),	SYS_TCR);
 	}
-
-	write_sysreg_el1(ctxt_sys_reg(ctxt, SCTLR_EL1),	SYS_SCTLR);
-	if (!has_vhe()) {
-		/* Ensure S1 MMU state is restored before allowing S1 walks. */
-		asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_SPECULATIVE_AT));
-	}
-	write_sysreg_el1(ctxt_sys_reg(ctxt, TCR_EL1),	SYS_TCR);
 
 	write_sysreg(ctxt_sys_reg(ctxt, SP_EL1),	sp_el1);
 	write_sysreg_el1(ctxt_sys_reg(ctxt, ELR_EL1),	SYS_ELR);

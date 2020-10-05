@@ -43,11 +43,42 @@ static void __activate_traps(struct kvm_vcpu *vcpu)
 	}
 
 	write_sysreg(val, cptr_el2);
+
+	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
+		struct kvm_cpu_context *ctxt = &vcpu->arch.ctxt;
+
+		isb();
+		/*
+		 * At this stage, and thanks to the above isb(), S2 is
+		 * configured and enabled. We can now restore the guest's S1
+		 * configuration: SCTLR, and only then TCR.
+		 */
+		write_sysreg_el1(ctxt_sys_reg(ctxt, SCTLR_EL1),	SYS_SCTLR);
+		isb();
+		write_sysreg_el1(ctxt_sys_reg(ctxt, TCR_EL1),	SYS_TCR);
+	}
 }
 
 static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu)
 {
 	___deactivate_traps(vcpu);
+
+	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
+		u64 val;
+
+		/*
+		 * Set the TCR and SCTLR registers in the exact opposite
+		 * sequence as __activate_traps (first prevent walks,
+		 * then force the MMU on). A generous sprinkling of isb()
+		 * ensure that things happen in this exact order.
+		 */
+		val = read_sysreg_el1(SYS_TCR);
+		write_sysreg_el1(val | TCR_EPD1_MASK | TCR_EPD0_MASK, SYS_TCR);
+		isb();
+		val = read_sysreg_el1(SYS_SCTLR);
+		write_sysreg_el1(val | SCTLR_ELx_M, SYS_SCTLR);
+		isb();
+	}
 
 	__deactivate_traps_common();
 
@@ -56,12 +87,9 @@ static void __deactivate_traps(struct kvm_vcpu *host_vcpu, struct kvm_vcpu *vcpu
 	write_sysreg(CPTR_EL2_DEFAULT, cptr_el2);
 }
 
-static void __restore_stage2(struct kvm_vcpu *vcpu)
+static void __deactivate_vm(struct kvm_vcpu *vcpu)
 {
-	if (vcpu->arch.hcr_el2 & HCR_VM)
-		__activate_vm(kern_hyp_va(vcpu->arch.hw_mmu));
-	else
-		write_sysreg(0, vttbr_el2);
+	write_sysreg(0, vttbr_el2);
 }
 
 /* Save VGICv3 state on non-VHE systems */
@@ -119,6 +147,8 @@ static void __pmu_switch_to_host(void)
 static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 				       struct kvm_vcpu *vcpu)
 {
+	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
+
 	/*
 	 * Having IRQs masked via PMR when entering the guest means the GIC
 	 * will not signal the CPU of interrupts of lower priority, and the
@@ -132,6 +162,20 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 
 	__pmu_switch_to_guest();
 
+	/*
+	 * We must restore the 32-bit state before the sysregs, thanks
+	 * to erratum #852523 (Cortex-A57) or #853709 (Cortex-A72).
+	 *
+	 * Also, and in order to be able to deal with erratum #1319537 (A57)
+	 * and #1319367 (A72), we must ensure that all VM-related sysreg are
+	 * restored before we enable S2 translation.
+	 */
+	__sysreg32_restore_state(vcpu);
+	__sysreg_restore_state_nvhe(guest_ctxt);
+
+	__activate_vm(kern_hyp_va(vcpu->arch.hw_mmu));
+	__activate_traps(vcpu);
+
 	__timer_enable_traps(vcpu);
 }
 
@@ -139,6 +183,11 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
 	__timer_disable_traps(vcpu);
+
+	__deactivate_traps(host_vcpu, vcpu);
+	__deactivate_vm(vcpu);
+
+	__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 
 	__pmu_switch_to_host();
 
@@ -176,39 +225,6 @@ static void __vcpu_restore_state(struct kvm_vcpu *vcpu, bool restore_debug)
 		__kvm_vcpu_switch_to_host(vcpu, running_vcpu);
 	else
 		__kvm_vcpu_switch_to_guest(running_vcpu, vcpu);
-
-	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
-		u64 val;
-
-		/*
-		 * Set the TCR and SCTLR registers to prevent any stage 1 or 2
-		 * page table walks or TLB allocations. A generous sprinkling
-		 * of isb() ensure that things happen in this exact order.
-		 */
-		val = read_sysreg_el1(SYS_TCR);
-		write_sysreg_el1(val | TCR_EPD1_MASK | TCR_EPD0_MASK, SYS_TCR);
-		isb();
-		val = read_sysreg_el1(SYS_SCTLR);
-		write_sysreg_el1(val | SCTLR_ELx_M, SYS_SCTLR);
-		isb();
-	}
-
-	/*
-	 * We must restore the 32-bit state before the sysregs, thanks to
-	 * erratum #852523 (Cortex-A57) or #853709 (Cortex-A72).
-	 *
-	 * Also, and in order to deal with the speculative AT errata, we must
-	 * ensure the S2 translation is restored before allowing page table
-	 * walks and TLB allocations when the sysregs are restored.
-	 */
-	__restore_stage2(vcpu);
-	__sysreg32_restore_state(vcpu);
-	__sysreg_restore_state_nvhe(&vcpu->arch.ctxt);
-
-	if (vcpu->arch.ctxt.is_host)
-		__deactivate_traps(vcpu, running_vcpu);
-	else
-		__activate_traps(vcpu);
 
 	__hyp_vgic_restore_state(vcpu);
 
@@ -282,7 +298,7 @@ void __noreturn hyp_panic(void)
 	if (vcpu != host_vcpu) {
 		__timer_disable_traps(vcpu);
 		__deactivate_traps(host_vcpu, vcpu);
-		__restore_stage2(host_vcpu);
+		__deactivate_vm(vcpu);
 		__sysreg_restore_state_nvhe(&host_vcpu->arch.ctxt);
 	}
 
