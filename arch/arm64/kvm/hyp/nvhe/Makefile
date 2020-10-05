@@ -48,8 +48,6 @@ quiet_cmd_hypcopy = HYPCOPY $@
 	fi;								\
 	$(OBJCOPY) --prefix-symbols=__kvm_nvhe_				\
 		   --rename-section=.text=.hyp.text			\
-		   --rename-section=.data..percpu=.hyp.data..percpu	\
-		   --rename-section=.data..percpu..read_mostly=.hyp.data..percpu..read_mostly \
 		   $< $@
 
 # Remove ftrace and Shadow Call Stack CFLAGS.

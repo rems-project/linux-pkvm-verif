@@ -35,7 +35,7 @@ void kvm_set_pmu_events(u32 set, struct perf_event_attr *attr)
 {
 	struct kvm_pmu_events *pmu = this_cpu_ptr_hyp(kvm_pmu_events);
 
-	if (!pmu || !kvm_pmu_switch_needed(attr))
+	if (!kvm_pmu_switch_needed(attr))
 		return;
 
 	if (!attr->exclude_host)
@@ -50,9 +50,6 @@ void kvm_set_pmu_events(u32 set, struct perf_event_attr *attr)
 void kvm_clr_pmu_events(u32 clr)
 {
 	struct kvm_pmu_events *pmu = this_cpu_ptr_hyp(kvm_pmu_events);
-
-	if (!pmu)
-		return;
 
 	pmu->events_host &= ~clr;
 	pmu->events_guest &= ~clr;

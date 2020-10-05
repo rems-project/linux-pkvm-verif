@@ -96,23 +96,8 @@
 #define CHOOSE_VHE_SYM(sym)	sym
 #define CHOOSE_NVHE_SYM(sym)	kvm_nvhe_sym(sym)
 
-/* Array of percpu base addresses. Length of the array is nr_cpu_ids. */
-extern unsigned long *kvm_arm_hyp_percpu_base;
-
-/*
- * Compute pointer to a symbol defined in nVHE percpu region.
- * Returns NULL if percpu memory has not been allocated yet.
- */
-#define this_cpu_ptr_nvhe(sym)	per_cpu_ptr_nvhe(sym, smp_processor_id())
-#define per_cpu_ptr_nvhe(sym, cpu)					\
-	({								\
-		unsigned long base, off;				\
-		base = kvm_arm_hyp_percpu_base				\
-			? kvm_arm_hyp_percpu_base[cpu] : 0;		\
-		off = (unsigned long)&kvm_nvhe_sym(sym) -		\
-		      (unsigned long)&kvm_nvhe_sym(__per_cpu_start);	\
-		base ? (typeof(kvm_nvhe_sym(sym))*)(base + off) : NULL;	\
-	})
+#define this_cpu_ptr_nvhe(sym)		this_cpu_ptr(&kvm_nvhe_sym(sym))
+#define per_cpu_ptr_nvhe(sym, cpu)	per_cpu_ptr(&kvm_nvhe_sym(sym), cpu)
 
 #ifndef __KVM_NVHE_HYPERVISOR__
 /*

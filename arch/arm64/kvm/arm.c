@@ -49,7 +49,6 @@ __asm__(".arch_extension	virt");
 DEFINE_PER_CPU(struct kvm_cpu_context, kvm_host_ctxt);
 DEFINE_PER_CPU(struct kvm_guest_debug_arch, kvm_host_debug_state);
 static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
-unsigned long *kvm_arm_hyp_percpu_base;
 
 DECLARE_KVM_NVHE_PER_CPU(struct kvm_cpu_context, kvm_hyp_ctxt);
 DECLARE_KVM_NVHE_PER_CPU(struct kvm_vcpu, kvm_host_vcpu);
@@ -1267,15 +1266,6 @@ long kvm_arch_vm_ioctl(struct file *filp,
 	}
 }
 
-#define kvm_hyp_percpu_base(cpu)	((unsigned long)per_cpu_ptr_nvhe(__per_cpu_start, cpu))
-#define kvm_hyp_percpu_array_size	(nr_cpu_ids * sizeof(*kvm_arm_hyp_percpu_base))
-#define kvm_hyp_percpu_array_order	(get_order(kvm_hyp_percpu_array_size))
-#define kvm_hyp_percpu_begin		kvm_nvhe_sym(__per_cpu_start)
-#define kvm_hyp_percpu_size		((unsigned long)kvm_nvhe_sym(__per_cpu_end) - \
-					 (unsigned long)kvm_nvhe_sym(__per_cpu_start))
-#define kvm_hyp_percpu_order		(kvm_hyp_percpu_size \
-						? get_order(kvm_hyp_percpu_size) : 0)
-
 static void cpu_init_hyp_mode(void)
 {
 	DECLARE_KVM_NVHE_SYM(__kvm_hyp_start);
@@ -1295,8 +1285,8 @@ static void cpu_init_hyp_mode(void)
 	 * kernel's mapping to the linear mapping, and store it in tpidr_el2
 	 * so that we can use adr_l to access per-cpu variables in EL2.
 	 */
-	tpidr_el2 = (unsigned long)this_cpu_ptr_nvhe(__per_cpu_start) -
-		    (unsigned long)kvm_ksym_ref(kvm_hyp_percpu_begin);
+	tpidr_el2 = ((unsigned long)this_cpu_ptr(&kvm_hyp_running_vcpu) -
+		     (unsigned long)kvm_ksym_ref(&kvm_hyp_running_vcpu));
 
 	pgd_ptr = kvm_mmu_get_httbr();
 	hyp_stack_ptr = __this_cpu_read(kvm_arm_hyp_stack_page) + PAGE_SIZE;
@@ -1533,11 +1523,8 @@ static void teardown_hyp_mode(void)
 	int cpu;
 
 	free_hyp_pgds();
-	for_each_possible_cpu(cpu) {
+	for_each_possible_cpu(cpu)
 		free_hyp_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
-		free_hyp_pages(kvm_hyp_percpu_base(cpu), kvm_hyp_percpu_order);
-	}
-	free_hyp_pages((unsigned long)kvm_arm_hyp_percpu_base, kvm_hyp_percpu_array_order);
 }
 
 /**
@@ -1568,28 +1555,6 @@ static int init_hyp_mode(void)
 		}
 
 		per_cpu(kvm_arm_hyp_stack_page, cpu) = stack_page;
-	}
-
-	/*
-	 * Allocate and initialize pages for Hypervisor-mode percpu regions.
-	 */
-	kvm_arm_hyp_percpu_base = (unsigned long*)alloc_hyp_pages(
-			GFP_KERNEL | __GFP_ZERO, kvm_hyp_percpu_array_order);
-	if (!kvm_arm_hyp_percpu_base) {
-		err = -ENOMEM;
-		goto out_err;
-	}
-	for_each_possible_cpu(cpu) {
-		unsigned long percpu_base;
-
-		percpu_base = alloc_hyp_pages(GFP_KERNEL, kvm_hyp_percpu_order);
-		if (!percpu_base) {
-			err = -ENOMEM;
-			goto out_err;
-		}
-
-		memcpy((void*)percpu_base, kvm_hyp_percpu_begin, kvm_hyp_percpu_size);
-		kvm_arm_hyp_percpu_base[cpu] = percpu_base;
 	}
 
 	/*
@@ -1632,20 +1597,6 @@ static int init_hyp_mode(void)
 
 		if (err) {
 			kvm_err("Cannot map hyp stack\n");
-			goto out_err;
-		}
-	}
-
-	/*
-	 * Map Hyp percpu pages
-	 */
-	for_each_possible_cpu(cpu) {
-		char *percpu_begin = (char *)kvm_arm_hyp_percpu_base[cpu];
-		char *percpu_end = percpu_begin + PAGE_ALIGN(kvm_hyp_percpu_size);
-		err = create_hyp_mappings(percpu_begin, percpu_end, PAGE_HYP);
-
-		if (err) {
-			kvm_err("Cannot map hyp percpu region\n");
 			goto out_err;
 		}
 	}
