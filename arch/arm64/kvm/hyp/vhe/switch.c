@@ -207,9 +207,8 @@ static void __hyp_call_panic(u64 spsr, u64 elr, u64 par,
 }
 NOKPROBE_SYMBOL(__hyp_call_panic);
 
-void __noreturn hyp_panic(void)
+void __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 {
-	struct kvm_cpu_context *host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	u64 spsr = read_sysreg_el2(SYS_SPSR);
 	u64 elr = read_sysreg_el2(SYS_ELR);
 	u64 par = read_sysreg(par_el1);
