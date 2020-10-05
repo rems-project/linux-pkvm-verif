@@ -43,7 +43,7 @@ SYM_CODE_START(__kvm_hyp_start)
 	 */
 	sub	sp, sp, 16
 
-	adr_this_cpu x1, kvm_host_vcpu, x0
+	hyp_adr_this_cpu x1, kvm_host_vcpu, x0
 	mov	x0, #ARM_EXCEPTION_TRAP
 	b	__guest_exit
 SYM_CODE_END(__kvm_hyp_start)

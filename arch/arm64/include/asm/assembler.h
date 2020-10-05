@@ -219,21 +219,6 @@ lr	.req	x30		// link register
 	.endm
 
 	/*
-	 * @dst: destination register (32 or 64 bit wide)
-	 */
-	.macro	this_cpu_offset, dst
-#ifdef __KVM_NVHE_HYPERVISOR__
-	mrs	\dst, tpidr_el2
-#else
-alternative_if_not ARM64_HAS_VIRT_HOST_EXTN
-	mrs	\dst, tpidr_el1
-alternative_else
-	mrs	\dst, tpidr_el2
-alternative_endif
-#endif
-	.endm
-
-	/*
 	 * @dst: Result of per_cpu(sym, smp_processor_id()) (can be SP)
 	 * @sym: The name of the per-cpu variable
 	 * @tmp: scratch register
@@ -241,7 +226,11 @@ alternative_endif
 	.macro adr_this_cpu, dst, sym, tmp
 	adrp	\tmp, \sym
 	add	\dst, \tmp, #:lo12:\sym
-	this_cpu_offset \tmp
+alternative_if_not ARM64_HAS_VIRT_HOST_EXTN
+	mrs	\tmp, tpidr_el1
+alternative_else
+	mrs	\tmp, tpidr_el2
+alternative_endif
 	add	\dst, \dst, \tmp
 	.endm
 
@@ -252,7 +241,11 @@ alternative_endif
 	 */
 	.macro ldr_this_cpu dst, sym, tmp
 	adr_l	\dst, \sym
-	this_cpu_offset \tmp
+alternative_if_not ARM64_HAS_VIRT_HOST_EXTN
+	mrs	\tmp, tpidr_el1
+alternative_else
+	mrs	\tmp, tpidr_el2
+alternative_endif
 	ldr	\dst, [\dst, \tmp]
 	.endm
 
