@@ -73,17 +73,13 @@ SYM_FUNC_START(__guest_enter)
 	save_sp_el0	x1, x2
 
 	// Now the host state is stored if we have a pending RAS SError it must
-	// affect the host. If physical IRQ interrupts are going to be trapped
-	// and there are already asynchronous exceptions pending then we defer
-	// the entry. The DSB isn't necessary before v8.2 as any SError would
-	// be fatal.
+	// affect the host. If any asynchronous exception is pending we defer
+	// the guest entry. The DSB isn't necessary before v8.2 as any SError
+	// would be fatal.
 alternative_if ARM64_HAS_RAS_EXTN
 	dsb	nshst
 	isb
 alternative_else_nop_endif
-	mrs	x1, hcr_el2
-	and	x1, x1, #HCR_IMO
-	cbz	x1, 1f
 	mrs	x1, isr_el1
 	cbz	x1,  1f
 	mov	x0, #ARM_EXCEPTION_IRQ
