@@ -189,37 +189,4 @@ reset:
 
 SYM_CODE_END(__kvm_handle_stub_hvc)
 
-SYM_FUNC_START(__kvm_init_switch_pgd)
-	/* Turn the MMU off */
-	pre_disable_mmu_workaround
-	mrs	x6, sctlr_el2
-	bic	x5, x6, #SCTLR_ELx_M
-	msr	sctlr_el2, x5
-	isb
-
-	tlbi	alle2
-
-	/* Install the new pgtables */
-	phys_to_ttbr x5, x2
-alternative_if ARM64_HAS_CNP
-	orr	x5, x5, #TTBR_CNP_BIT
-alternative_else_nop_endif
-	msr	ttbr0_el2, x5
-
-	/* Change the VBAR if it has been re-mapped in the idmap range */
-	ldr_l	x5, __kvm_bp_vect_base
-	cbz	x5, 1f
-	msr	vbar_el2, x5
-1:
-	/* Set the new stack pointer */
-	mov	sp, x3
-
-	/* And turn the MMU back on! */
-	dsb	nsh
-	isb
-	msr	sctlr_el2, x6
-	isb
-	ret	x4
-SYM_FUNC_END(__kvm_init_switch_pgd)
-
 	.popsection
