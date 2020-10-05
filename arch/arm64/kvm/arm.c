@@ -1262,12 +1262,9 @@ long kvm_arch_vm_ioctl(struct file *filp,
 
 static void cpu_init_hyp_mode(void)
 {
-	DECLARE_KVM_NVHE_SYM(__kvm_hyp_start);
-
 	phys_addr_t pgd_ptr;
 	unsigned long hyp_stack_ptr;
 	unsigned long vector_ptr;
-	unsigned long start_hyp;
 	unsigned long tpidr_el2;
 
 	/* Switch from the HYP stub to our own HYP init vector */
@@ -1285,7 +1282,6 @@ static void cpu_init_hyp_mode(void)
 	hyp_stack_ptr = __this_cpu_read(kvm_arm_hyp_stack_page) + PAGE_SIZE;
 	hyp_stack_ptr = kern_hyp_va(hyp_stack_ptr);
 	vector_ptr = (unsigned long)kvm_get_hyp_vector();
-	start_hyp = (unsigned long)kern_hyp_va(kvm_ksym_ref_nvhe(__kvm_hyp_start));
 
 	/*
 	 * Call initialization code, and switch to the full blown HYP code.
@@ -1294,8 +1290,7 @@ static void cpu_init_hyp_mode(void)
 	 * cpus_have_const_cap() wrapper.
 	 */
 	BUG_ON(!system_capabilities_finalized());
-	__kvm_call_hyp((void *)pgd_ptr, hyp_stack_ptr, vector_ptr, start_hyp,
-		       tpidr_el2);
+	__kvm_call_hyp((void *)pgd_ptr, hyp_stack_ptr, vector_ptr, tpidr_el2);
 
 	/*
 	 * Disabling SSBD on a non-VHE system requires us to enable SSBS
