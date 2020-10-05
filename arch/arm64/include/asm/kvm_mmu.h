@@ -292,14 +292,6 @@ static inline int kvm_map_vectors(void)
 
 	return 0;
 }
-
-/* Returns the BP vector PA if used */
-static inline phys_addr_t kvm_get_bp_vect_pa(void)
-{
-	if (cpus_have_const_cap(ARM64_HARDEN_EL2_VECTORS))
-		return __pa_symbol(__kvm_nvhe___bp_harden_hyp_vecs);
-	return 0;
-}
 #else
 static inline void *kvm_get_hyp_vector(void)
 {
@@ -307,11 +299,6 @@ static inline void *kvm_get_hyp_vector(void)
 }
 
 static inline int kvm_map_vectors(void)
-{
-	return 0;
-}
-
-static inline phys_addr_t kvm_get_bp_vect_pa(void)
 {
 	return 0;
 }

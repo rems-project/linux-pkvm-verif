@@ -121,13 +121,5 @@ void __noreturn hyp_panic(void);
 void __noreturn __hyp_do_panic(unsigned long, ...);
 #endif
 
-#ifdef __KVM_NVHE_HYPERVISOR__
-void __kvm_init_switch_pgd(phys_addr_t phys, unsigned long size,
-			   phys_addr_t pgd, void *sp, void *cont_fn);
-int __kvm_hyp_setup(phys_addr_t phys, void* virt, unsigned long size,
-		    phys_addr_t bp_vect_pa, unsigned long nr_cpus,
-		    phys_addr_t *per_cpu_base);
-#endif
-
 #endif /* __ARM64_KVM_HYP_H__ */
 

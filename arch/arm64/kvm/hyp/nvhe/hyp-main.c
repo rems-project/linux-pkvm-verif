@@ -6,15 +6,12 @@
 
 #include <hyp/switch.h>
 
-#include <asm/pgtable-types.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_emulate.h>
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
 
 #include <kvm/arm_hypercalls.h>
-
-#include <nvhe/mm.h>
 
 typedef __noreturn unsigned long (*stub_hvc_handler_t)
 	(unsigned long, unsigned long, unsigned long, unsigned long,
@@ -140,28 +137,6 @@ static void handle_host_hcall(unsigned long func_id, struct kvm_vcpu *host_vcpu)
 			__vgic_v3_restore_aprs(kern_hyp_va(cpu_if));
 			break;
 		}
-	case KVM_HOST_SMCCC_FUNC(__kvm_hyp_setup):
-		ret = __kvm_hyp_setup(
-			(phys_addr_t)	smccc_get_arg1(host_vcpu),
-			(void*)		smccc_get_arg2(host_vcpu),
-			(unsigned long)	smccc_get_arg3(host_vcpu),
-			(phys_addr_t)	smccc_get_arg4(host_vcpu),
-			(unsigned long)	smccc_get_arg5(host_vcpu),
-			(phys_addr_t *)	smccc_get_arg6(host_vcpu));
-		break;
-	case KVM_HOST_SMCCC_FUNC(__hyp_create_mappings):
-		ret = __hyp_create_mappings(
-			(unsigned long)	smccc_get_arg1(host_vcpu),
-			(unsigned long)	smccc_get_arg2(host_vcpu),
-			(unsigned long)	smccc_get_arg3(host_vcpu),
-			(unsigned long)	smccc_get_arg4(host_vcpu));
-		break;
-	case KVM_HOST_SMCCC_FUNC(__hyp_create_private_mapping):
-		ret = __hyp_create_private_mapping(
-			(phys_addr_t)	smccc_get_arg1(host_vcpu),
-			(unsigned long)	smccc_get_arg2(host_vcpu),
-			(unsigned long)	smccc_get_arg3(host_vcpu));
-		break;
 	default:
 		/* Invalid host HVC. */
 		smccc_set_retval(host_vcpu, SMCCC_RET_NOT_SUPPORTED, 0, 0, 0);
@@ -184,7 +159,7 @@ static void handle_trap(struct kvm_vcpu *host_vcpu) {
 	/* Other traps are ignored. */
 }
 
-void __noreturn kvm_hyp_loop(int ret)
+void __noreturn kvm_hyp_main(void)
 {
 	/* Set tpidr_el2 for use by HYP */
 	struct kvm_vcpu *host_vcpu;
@@ -208,7 +183,7 @@ void __noreturn kvm_hyp_loop(int ret)
 	 * The first time entering the host is seen by the host as the return
 	 * of the initialization HVC so mark it as successful.
 	 */
-	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, ret, 0, 0);
+	smccc_set_retval(host_vcpu, SMCCC_RET_SUCCESS, 0, 0, 0);
 
 	/* The host is already loaded so note it as the running vcpu. */
 	*this_cpu_ptr(&kvm_hyp_running_vcpu) = host_vcpu;
@@ -240,9 +215,4 @@ void __noreturn kvm_hyp_loop(int ret)
 		}
 
 	}
-}
-
-void __noreturn kvm_hyp_main(void)
-{
-	kvm_hyp_loop(0);
 }
