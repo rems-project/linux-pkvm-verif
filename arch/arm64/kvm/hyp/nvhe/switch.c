@@ -144,7 +144,8 @@ static void __pmu_switch_to_host(void)
 		write_sysreg(pmu->events_host, pmcntenset_el0);
 }
 
-static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
+static void __kvm_vcpu_switch_to_guest(struct kvm_cpu_context *host_ctxt,
+				       struct kvm_vcpu *host_vcpu,
 				       struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
@@ -184,7 +185,8 @@ static void __kvm_vcpu_switch_to_guest(struct kvm_vcpu *host_vcpu,
 	__debug_switch_to_guest(vcpu);
 }
 
-static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
+static void __kvm_vcpu_switch_to_host(struct kvm_cpu_context *host_ctxt,
+				      struct kvm_vcpu *host_vcpu,
 				      struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *guest_ctxt = &vcpu->arch.ctxt;
@@ -217,18 +219,20 @@ static void __kvm_vcpu_switch_to_host(struct kvm_vcpu *host_vcpu,
 
 static void __vcpu_switch_to(struct kvm_vcpu *vcpu)
 {
+	struct kvm_cpu_context *host_ctxt;
 	struct kvm_vcpu *running_vcpu;
 
 	/*
 	 * Restoration is not yet pure so it still makes use of the previously
 	 * running vcpu.
 	 */
+	host_ctxt = &__hyp_this_cpu_ptr(kvm_host_data)->host_ctxt;
 	running_vcpu = __hyp_this_cpu_read(kvm_hyp_running_vcpu);
 
 	if (vcpu->arch.ctxt.is_host)
-		__kvm_vcpu_switch_to_host(vcpu, running_vcpu);
+		__kvm_vcpu_switch_to_host(host_ctxt, vcpu, running_vcpu);
 	else
-		__kvm_vcpu_switch_to_guest(running_vcpu, vcpu);
+		__kvm_vcpu_switch_to_guest(host_ctxt, running_vcpu, vcpu);
 
 	*__hyp_this_cpu_ptr(kvm_hyp_running_vcpu) = vcpu;
 }
