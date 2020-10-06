@@ -72,3 +72,10 @@ KCOV_INSTRUMENT	:= n
 # Skip objtool checking for this directory because nVHE code is compiled with
 # non-standard build rules.
 OBJECT_FILES_NON_STANDARD := y
+
+# Hacks for analysis purposes
+ccflags-y += -O0
+extra-y += dummy.o el2.bin
+LDFLAGS_el2.bin := -T
+$(obj)/el2.bin: $(obj)/hyp.lds $(addprefix $(obj)/,$(hyp-obj)) $(obj)/dummy.o FORCE
+	$(call if_changed,ld)

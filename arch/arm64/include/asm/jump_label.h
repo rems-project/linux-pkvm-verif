@@ -15,6 +15,12 @@
 
 #define JUMP_LABEL_NOP_SIZE		AARCH64_INSN_SIZE
 
+#ifdef __KVM_NVHE_HYPERVISOR__
+#define __static_key_enabled(k)		(!!__READ_ONCE((k)->enabled.counter))
+#define arch_static_branch(k,b)		(b ^ __static_key_enabled(k))
+#define arch_static_branch_jump(k,b)	(b ^ __static_key_enabled(k))
+#else
+
 static __always_inline bool arch_static_branch(struct static_key *key,
 					       bool branch)
 {
@@ -49,5 +55,6 @@ l_yes:
 	return true;
 }
 
+#endif	/* !__KVM_NVHE_HYPERVISOR__ */
 #endif  /* __ASSEMBLY__ */
 #endif	/* __ASM_JUMP_LABEL_H */
