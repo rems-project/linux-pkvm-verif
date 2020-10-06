@@ -178,4 +178,33 @@ reset:
 
 SYM_CODE_END(__kvm_handle_stub_hvc)
 
+SYM_FUNC_START(__kvm_init_switch_pgd)
+	/* Turn the MMU off */
+	pre_disable_mmu_workaround
+	mrs	x6, sctlr_el2
+	bic	x7, x6, #SCTLR_ELx_M
+	msr	sctlr_el2, x7
+	isb
+
+	tlbi	alle2
+
+	/* Install the new pgtables */
+	phys_to_ttbr x7, x2
+alternative_if ARM64_HAS_CNP
+	orr	x7, x7, #TTBR_CNP_BIT
+alternative_else_nop_endif
+	msr	ttbr0_el2, x7
+
+	/* Set the new stack pointer */
+	mov	sp, x3
+	msr	vbar_el2, x4
+
+	/* And turn the MMU back on! */
+	dsb	nsh
+	isb
+	msr	sctlr_el2, x6
+	isb
+	ret	x5
+SYM_FUNC_END(__kvm_init_switch_pgd)
+
 	.popsection

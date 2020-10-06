@@ -181,6 +181,31 @@ static void __init reserve_elfcorehdr(void)
 }
 #endif /* CONFIG_CRASH_DUMP */
 
+#ifdef CONFIG_KVM
+phys_addr_t hyp_mem_base;
+phys_addr_t hyp_mem_size;
+static void __init reserve_hyp(void)
+{
+	/* Hyp memory is only needed for nVHE */
+	if (!is_hyp_mode_available() || is_kernel_in_hyp_mode())
+		return;
+
+	/* XXX - Compute this based on needs */
+	hyp_mem_size = SZ_32M;
+	hyp_mem_base = memblock_find_in_range(0, memblock_end_of_DRAM(),
+					      hyp_mem_size, SZ_2M);
+	if (!hyp_mem_base) {
+		pr_warn("Failed to allocate hyp memory\n");
+		return;
+	}
+	memblock_reserve(hyp_mem_base, hyp_mem_size);
+}
+#else
+static void __init reserve_hyp(void)
+{
+}
+#endif /* CONFIG_KVM */
+
 /*
  * Return the maximum physical address for a zone with a given address size
  * limit. It currently assumes that for memory starting above 4G, 32-bit
@@ -400,6 +425,8 @@ void __init arm64_memblock_init(void)
 	reserve_crashkernel();
 
 	reserve_elfcorehdr();
+
+	reserve_hyp();
 
 	high_memory = __va(memblock_end_of_DRAM() - 1) + 1;
 

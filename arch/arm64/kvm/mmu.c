@@ -88,6 +88,48 @@ static bool kvm_is_device_pfn(unsigned long pfn)
 	return !pfn_valid(pfn);
 }
 
+static void *stage2_memcache_alloc_page(void *arg)
+{
+	struct kvm_mmu_memory_cache *mc = arg;
+	kvm_pte_t *ptep = NULL;
+
+	/* Allocated with GFP_PGTABLE_USER, so no need to zero */
+	if (mc && mc->nobjs)
+		ptep = mc->objects[--mc->nobjs];
+
+	return ptep;
+}
+
+static void *kvm_host_zalloc_pages_exact(size_t size)
+{
+	return alloc_pages_exact(size, GFP_KERNEL | __GFP_ZERO);
+}
+
+static void kvm_host_get_page(void *addr)
+{
+	get_page(virt_to_page(addr));
+}
+
+static void kvm_host_put_page(void *addr)
+{
+	put_page(virt_to_page(addr));
+}
+
+static int kvm_host_page_count(void *addr)
+{
+	return page_count(virt_to_page(addr));
+}
+
+static phys_addr_t kvm_host_pa(void *addr)
+{
+	return __pa(addr);
+}
+
+static void *kvm_host_va(phys_addr_t phys)
+{
+	return __va(phys);
+}
+
 /*
  * Unmapping vs dcache management:
  *
@@ -192,6 +234,12 @@ static int __create_hyp_mappings(unsigned long start, unsigned long size,
 {
 	int err;
 
+	if (static_branch_likely(&kvm_hyp_ready)) {
+		kvm_arch_hardware_enable(); /* XXX */
+		return kvm_call_hyp_nvhe(__hyp_create_mappings,
+					 start, size, phys, prot);
+	}
+
 	mutex_lock(&kvm_hyp_pgd_mutex);
 	err = kvm_pgtable_hyp_map(hyp_pgtable, start, size, phys, prot);
 	mutex_unlock(&kvm_hyp_pgd_mutex);
@@ -253,6 +301,18 @@ static int __create_hyp_private_mapping(phys_addr_t phys_addr, size_t size,
 	unsigned long base;
 	int ret = 0;
 
+
+	if (static_branch_likely(&kvm_hyp_ready)) {
+		kvm_arch_hardware_enable(); /* XXX */
+		base = kvm_call_hyp_nvhe(__hyp_create_private_mapping,
+					 phys_addr, size, prot);
+		if (!base)
+			return -ENOMEM;
+		*haddr = base + offset_in_page(phys_addr);
+
+		return 0;
+	}
+
 	mutex_lock(&kvm_hyp_pgd_mutex);
 
 	/*
@@ -291,14 +351,14 @@ out:
 }
 
 #ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
-static unsigned long arm64_kvm_hyp_debug_uart_addr;
+extern unsigned long __kvm_nvhe_arm64_kvm_hyp_debug_uart_addr;
 
 void __init kvm_hyp_debug_uart_set_basep(struct alt_instr *alt,
 					 __le32 *origptr, __le32 *updptr,
 					 int nr_inst)
 {
 	int i;
-	u64 addr = (u64)kvm_ksym_ref(&arm64_kvm_hyp_debug_uart_addr);
+	u64 addr = (u64)kvm_ksym_ref(&__kvm_nvhe_arm64_kvm_hyp_debug_uart_addr);
 
 	BUG_ON(nr_inst != 4);
 
@@ -321,7 +381,7 @@ static int create_hyp_debug_uart_mapping(void)
 
 	return __create_hyp_private_mapping(CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR,
 					    PAGE_SIZE,
-					    &arm64_kvm_hyp_debug_uart_addr,
+					    &__kvm_nvhe_arm64_kvm_hyp_debug_uart_addr,
 					    PAGE_HYP_DEVICE);
 }
 #else
@@ -389,6 +449,17 @@ int create_hyp_exec_mappings(phys_addr_t phys_addr, size_t size,
 	return 0;
 }
 
+static struct kvm_pgtable_mm_ops kvm_s2_mm_ops = {
+	.zalloc_page		= stage2_memcache_alloc_page,
+	.zalloc_pages_exact	= kvm_host_zalloc_pages_exact,
+	.free_pages_exact	= free_pages_exact,
+	.get_page		= kvm_host_get_page,
+	.put_page		= kvm_host_put_page,
+	.page_count		= kvm_host_page_count,
+	.phys_to_virt		= kvm_host_va,
+	.virt_to_phys		= kvm_host_pa,
+};
+
 /**
  * kvm_init_stage2_mmu - Initialise a S2 MMU strucrure
  * @kvm:	The pointer to the KVM structure
@@ -412,7 +483,7 @@ int kvm_init_stage2_mmu(struct kvm *kvm, struct kvm_s2_mmu *mmu)
 	if (!pgt)
 		return -ENOMEM;
 
-	err = kvm_pgtable_stage2_init(pgt, kvm);
+	err = kvm_pgtable_stage2_init(pgt, kvm, &kvm_s2_mm_ops);
 	if (err)
 		goto out_free_pgtable;
 
@@ -1199,9 +1270,14 @@ int kvm_test_age_hva(struct kvm *kvm, unsigned long hva)
 				 kvm_test_age_hva_handler, NULL);
 }
 
+/* XXX - should not be needed if vectors and pgds stayed in place */
+extern phys_addr_t __kvm_nvhe___phys_hyp_pgd;
 phys_addr_t kvm_mmu_get_httbr(void)
 {
-	return __pa(hyp_pgtable->pgd);
+	if (static_branch_likely(&kvm_hyp_ready))
+		return __kvm_nvhe___phys_hyp_pgd;
+	else
+		return __pa(hyp_pgtable->pgd);
 }
 
 phys_addr_t kvm_get_idmap_vector(void)
@@ -1221,10 +1297,23 @@ static int kvm_map_idmap_text(void)
 	return err;
 }
 
+static void *kvm_hyp_zalloc_page(void *arg)
+{
+	return (void*)get_zeroed_page(GFP_KERNEL);
+}
+
+static struct kvm_pgtable_mm_ops kvm_hyp_mm_ops = {
+	.zalloc_page		= kvm_hyp_zalloc_page,
+	.get_page		= kvm_host_get_page,
+	.put_page		= kvm_host_put_page,
+	.phys_to_virt		= kvm_host_va,
+	.virt_to_phys		= kvm_host_pa,
+};
+
+u32 hyp_va_bits;
 int kvm_mmu_init(void)
 {
 	int err;
-	u32 hyp_va_bits;
 
 	hyp_idmap_start = __pa_symbol(__hyp_idmap_text_start);
 	hyp_idmap_start = ALIGN_DOWN(hyp_idmap_start, PAGE_SIZE);
@@ -1264,7 +1353,7 @@ int kvm_mmu_init(void)
 		goto out;
 	}
 
-	err = kvm_pgtable_hyp_init(hyp_pgtable, hyp_va_bits);
+	err = kvm_pgtable_hyp_init(hyp_pgtable, hyp_va_bits, &kvm_hyp_mm_ops);
 	if (err)
 		goto out_free_pgtable;
 
