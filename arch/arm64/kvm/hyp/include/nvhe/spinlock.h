@@ -18,6 +18,7 @@
 #define __ARM64_KVM_NVHE_SPINLOCK_H__
 
 #include <asm/alternative.h>
+#include <asm/lse.h>
 
 typedef union nvhe_spinlock {
 	u32	__val;
@@ -42,7 +43,7 @@ static inline void nvhe_spin_lock(nvhe_spinlock_t *lock)
 
 	asm volatile(
 	/* Atomically increment the next ticket. */
-	ALTERNATIVE(
+	ARM64_LSE_ATOMIC_INSN(
 	/* LL/SC */
 "	prfm	pstl1strm, %3\n"
 "1:	ldaxr	%w0, %3\n"
@@ -53,8 +54,7 @@ static inline void nvhe_spin_lock(nvhe_spinlock_t *lock)
 "	.arch_extension lse\n"
 "	mov	%w2, #(1 << 16)\n"
 "	ldadda	%w2, %w0, %3\n"
-	__nops(3),
-	ARM64_HAS_LSE_ATOMICS)
+	__nops(3))
 
 	/* Did we get the lock? */
 "	eor	%w1, %w0, %w0, ror #16\n"
@@ -80,7 +80,7 @@ static inline void nvhe_spin_unlock(nvhe_spinlock_t *lock)
 	u64 tmp;
 
 	asm volatile(
-	ALTERNATIVE(
+	ARM64_LSE_ATOMIC_INSN(
 	/* LL/SC */
 	"	ldrh	%w1, %0\n"
 	"	add	%w1, %w1, #1\n"
@@ -89,8 +89,7 @@ static inline void nvhe_spin_unlock(nvhe_spinlock_t *lock)
 	"	.arch_extension lse\n"
 	"	mov	%w1, #1\n"
 	"	staddlh	%w1, %0\n"
-	__nops(1),
-	ARM64_HAS_LSE_ATOMICS)
+	__nops(1))
 	: "=Q" (lock->owner), "=&r" (tmp)
 	:
 	: "memory");
