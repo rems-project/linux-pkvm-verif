@@ -87,7 +87,6 @@ KVM_NVHE_ALIAS(__icache_flags);
 /* Kernel symbols needed for cpus_have_final/const_caps checks. */
 KVM_NVHE_ALIAS(arm64_const_caps_ready);
 KVM_NVHE_ALIAS(cpu_hwcap_keys);
-KVM_NVHE_ALIAS(cpu_hwcaps);
 
 /* Kernel symbols needed for CPU features checks. */
 KVM_NVHE_ALIAS(arm64_ftr_reg_ctrel0);
