@@ -12,6 +12,7 @@
 #include <nvhe/early_alloc.h>
 #include <nvhe/gfp.h>
 #include <nvhe/memory.h>
+#include <nvhe/mem_protect.h>
 #include <nvhe/mm.h>
 
 struct hyp_pool hpool;
@@ -158,6 +159,11 @@ void __noreturn __kvm_hyp_protect_finalise(void)
 	nr_pages = hyp_s1_pgtable_size() >> PAGE_SHIFT;
 	used_pages = hyp_early_alloc_nr_pages();
 	ret = hyp_pool_init(&hpool, __hyp_pa(hyp_pgt_base), nr_pages, used_pages);
+	if (ret)
+		goto out;
+
+	/* Wrap the host with a stage 2 */
+	ret = kvm_host_prepare_stage2(host_s2_mem_pgt_base, host_s2_dev_pgt_base);
 	if (ret)
 		goto out;
 
