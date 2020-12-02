@@ -51,7 +51,6 @@
 				     KVM_DIRTY_LOG_INITIALLY_SET)
 
 DECLARE_STATIC_KEY_FALSE(userspace_irqchip_in_use);
-DECLARE_STATIC_KEY_FALSE(kvm_hyp_ready);
 
 extern unsigned int kvm_sve_max_vl;
 int kvm_arm_init_sve(void);
