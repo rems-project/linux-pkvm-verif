@@ -21,5 +21,4 @@ SECTIONS {
 	HYP_SECTION_NAME(.data..percpu) : {
 		PERCPU_INPUT(L1_CACHE_BYTES)
 	}
-	HYP_SECTION(.bss)
 }
