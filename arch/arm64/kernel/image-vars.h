@@ -114,10 +114,6 @@ __kvm_nvhe___memcpy			= __kvm_nvhe___pi_memcpy;
 __kvm_nvhe___memset			= __kvm_nvhe___pi_memset;
 #endif
 
-#ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
-KVM_NVHE_ALIAS(kvm_hyp_debug_uart_set_basep);
-#endif
-
 #endif /* CONFIG_KVM */
 
 #endif /* __ARM64_KERNEL_IMAGE_VARS_H */

@@ -290,44 +290,6 @@ out:
 	return ret;
 }
 
-#ifdef CONFIG_KVM_ARM_HYP_DEBUG_UART
-static unsigned long arm64_kvm_hyp_debug_uart_addr;
-
-void __init kvm_hyp_debug_uart_set_basep(struct alt_instr *alt,
-					 __le32 *origptr, __le32 *updptr,
-					 int nr_inst)
-{
-	int i;
-	u64 addr = (u64)kvm_ksym_ref(&arm64_kvm_hyp_debug_uart_addr);
-
-	BUG_ON(nr_inst != 4);
-
-	for (i = 0; i < 4; ++i) {
-		u32 insn = le32_to_cpu(origptr[i]);
-
-		insn = aarch64_insn_encode_immediate(AARCH64_INSN_IMM_16,
-						     insn,
-						     addr & 0xffff);
-		BUG_ON(insn == AARCH64_BREAK_FAULT);
-		updptr[i] = cpu_to_le32(insn);
-		addr >>= 16;
-	}
-}
-
-static int create_hyp_debug_uart_mapping(void)
-{
-	if (is_kernel_in_hyp_mode())
-		return -EBUSY;
-
-	return __create_hyp_private_mapping(CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR,
-					    PAGE_SIZE,
-					    &arm64_kvm_hyp_debug_uart_addr,
-					    PAGE_HYP_DEVICE);
-}
-#else
-static int create_hyp_debug_uart_mapping(void) { return 0; }
-#endif
-
 /**
  * create_hyp_io_mappings - Map IO into both kernel and HYP
  * @phys_addr:	The physical start address which gets mapped
@@ -1288,7 +1250,6 @@ int kvm_mmu_init(void)
 		goto out_destroy_pgtable;
 
 	io_map_base = hyp_idmap_start;
-	WARN_ON(create_hyp_debug_uart_mapping());
 	return 0;
 
 out_destroy_pgtable:
