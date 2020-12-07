@@ -40,12 +40,21 @@ cc_has_k_constraint := $(call try-run,echo				\
 		return 0;						\
 	}' | $(CC) -S -x c -o "$$TMP" -,,-DCONFIG_CC_HAS_K_CONSTRAINT=1)
 
+cc_has_broken_s_constraint := $(call try-run,echo			\
+	'void *foo(void) {						\
+		static int x;						\
+		int *addr;						\
+		asm("adrp %0, %1" : "=r" (addr) : "S" (&x));		\
+		return addr;						\
+	}' | $(CC) -S -x c -c -O2 -o "$$TMP" -,,-DCONFIG_CC_HAS_BROKEN_S_CONSTRAINT=1)
+
 ifeq ($(CONFIG_BROKEN_GAS_INST),y)
 $(warning Detected assembler with broken .inst; disassembly will be unreliable)
 endif
 
 KBUILD_CFLAGS	+= -mgeneral-regs-only	\
 		   $(compat_vdso) $(cc_has_k_constraint)
+KBUILD_CFLAGS	+= $(cc_has_broken_s_constraint)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, psabi)
 KBUILD_AFLAGS	+= $(compat_vdso)
 
