@@ -477,10 +477,20 @@ static bool stage2_map_walker_try_leaf(u64 addr, u64 end, u32 level,
 				       kvm_pte_t *ptep,
 				       struct stage2_map_data *data)
 {
+	struct kvm_pgtable_mm_ops *mm_ops = data->mm_ops;
 	u64 granule = kvm_granule_size(level), phys = data->phys;
 
 	if (!kvm_block_mapping_supported(addr, end, phys, level))
 		return false;
+
+	/*
+	 * If the PTE was already valid, drop the refcount on the table
+	 * early, as it will be bumped-up again in stage2_map_walk_leaf().
+	 * This ensures that the refcount stays constant across a valid to
+	 * valid PTE update.
+	 */
+	if (kvm_pte_valid(*ptep))
+		mm_ops->put_page(ptep);
 
 	if (kvm_set_valid_leaf_pte(ptep, phys, data->attr, level))
 		goto out;
@@ -505,7 +515,13 @@ static int stage2_map_walk_table_pre(u64 addr, u64 end, u32 level,
 		return 0;
 
 	kvm_set_invalid_pte(ptep);
-	kvm_call_hyp(__kvm_tlb_flush_vmid_ipa, data->mmu, addr, 0);
+
+	/*
+	 * Invalidate the whole stage-2, as we may have numerous leaf
+	 * entries below us which would otherwise need invalidating
+	 * individually.
+	 */
+	kvm_call_hyp(__kvm_tlb_flush_vmid, data->mmu);
 	data->anchor = ptep;
 	return 0;
 }
