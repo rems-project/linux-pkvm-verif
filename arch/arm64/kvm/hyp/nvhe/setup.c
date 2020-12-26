@@ -15,6 +15,9 @@
 #include <nvhe/mem_protect.h>
 #include <nvhe/mm.h>
 
+// PS HACK
+#include <../debug-pl011.h>
+
 struct hyp_pool hpool;
 struct kvm_pgtable_mm_ops hyp_pgtable_mm_ops;
 unsigned long hyp_nr_cpus;
@@ -228,6 +231,10 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
 
 	update_nvhe_init_params();
 
+
+	// PS HACK
+	hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');
+	
 	/* Jump in the idmap page to switch to the new page-tables */
 	params = this_cpu_ptr(&kvm_init_params);
 	fn = (typeof(fn))__hyp_pa(hyp_symbol_addr(__kvm_init_switch_pgd));
