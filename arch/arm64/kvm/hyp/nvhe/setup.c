@@ -18,6 +18,9 @@
 // PS HACK
 #include <../debug-pl011.h>
 
+// PS HACK
+#include <nvhe/check-pkvm-pgtables.h>
+
 struct hyp_pool hpool;
 struct kvm_pgtable_mm_ops hyp_pgtable_mm_ops;
 unsigned long hyp_nr_cpus;
@@ -231,6 +234,11 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
 
 	update_nvhe_init_params();
 
+
+        // PS HACK
+	// check sample property of the putative mapping
+	_Bool check = check_hyp_mappings();
+	// can't actually output the result yet, as I've not got the uart working in QEMU
 
 	// PS HACK
 	//	hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');
