@@ -30,13 +30,23 @@
 // Note that it reads pagetable contents just using the current
 // mapping, whatever that is. 
 
+
+
 #include <asm/kvm_pgtable.h>
-#include <asm/kvm_asm.h>
-#include <nvhe/memory.h>
+//#include <asm/kvm_asm.h>
+//#include <nvhe/memory.h>
 #include <nvhe/mm.h>
 #include <linux/bits.h>
 
 
+// the per-cpu check needs 
+//   kern_hyp_va from arch/arm64/include/asm/kvm_mmu.h
+//   hyp_percpu_size  from arch/arm64/kvm/hyp/nvhe/setup.c
+// but when I try to #include <asm/kvm_mmu.h> for the former, I get build errors from files it includes
+// So I just comment out that check for now
+
+// It may be that we need to remember some of these values in a more
+// convenient location anyhow.
 
 
 /* ************************************************************************** */
@@ -218,6 +228,7 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
 	      table_base_next = pte & GENMASK(47,12); 
 	      return AArch64_TranslationTableWalk(table_base_next, level+1, vaddress);
 	    }
+	default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
 	  }
       }
     default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
@@ -262,17 +273,20 @@ struct AddressDescriptor AArch64_FirstStageTranslate(uint64_t table_base, uint64
 /* using the above to sketch an assertion for the state established by pKVM initialisation */
 
 
+/** from kvm_pgtable.h, pgt has (among other members which aren't relevant here):
+ * @ia_bits:		Maximum input address size, in bits.
+ * @start_level:	Level at which the page-table walk starts.
+ * @pgd:		Pointer to the first top-level entry of the page-table.
+ *
+ * where pgd is a kvm_pte_t *, and kvm_pte_t is just u64
+ */
 
 
-_Bool _check_hyp_mapping(struct kvm_pgtable *pgt, void *virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
+// check a specific virt |-> (phys,prot) in the pagetables at pgd
+_Bool __check_hyp_mapping(kvm_pte_t *pgd, void *virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
-  /** from kvm_pgtable.h, pgt has (among other members which aren't relevant here):
-   * @ia_bits:		Maximum input address size, in bits.
-   * @start_level:	Level at which the page-table walk starts.
-   * @pgd:		Pointer to the first top-level entry of the page-table.
-   */
-  
-  struct AddressDescriptor ad = AArch64_FirstStageTranslate((uint64_t)pgt->pgd, (uint64_t)virt);
+
+  struct AddressDescriptor ad = AArch64_FirstStageTranslate((uint64_t)pgd, (uint64_t)virt);
   
   switch (ad.fault.statuscode)
     {
@@ -283,22 +297,109 @@ _Bool _check_hyp_mapping(struct kvm_pgtable *pgt, void *virt, phys_addr_t phys, 
     }
 }
 
-_Bool check_hyp_mapping(void *from, void *to, enum kvm_pgtable_prot prot)
+// check a range  [virt..virt+size) |-> ([phys..phys+size), prot) in the pagetables at pgd
+_Bool _check_hyp_mapping(kvm_pte_t *pgd, void *virt, uint64_t size, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
-  // just check the first address for now (aligned in the same way as hyp_create_mappings) - later, the first address of each page
-  unsigned long virt_addr = (unsigned long)from & PAGE_MASK;
-  void * virt = (void*)virt_addr;
-  phys_addr_t phys = hyp_virt_to_phys(virt);
-  struct kvm_pgtable *pgt = &hyp_pgtable; 
-  _Bool ret = _check_hyp_mapping(pgt, virt, phys, prot);
+  // TODO: just check the first address for now - really, the first address of each page in the range
+  _Bool ret = __check_hyp_mapping(pgd, virt, phys, prot);
   return ret;
 }
-  
-  
-_Bool check_hyp_mappings(void)
+
+
+// check a range  virt_from..virt_to |-> (..the physical addresses given by hyp_virt_to_phys..., prot)
+_Bool check_hyp_mapping(kvm_pte_t *pgd, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
-  _Bool ret = check_hyp_mapping(hyp_symbol_addr(__hyp_text_start),
-				hyp_symbol_addr(__hyp_text_end),
-				PAGE_HYP_EXEC);
+  unsigned long virt = (unsigned long)virt_from & PAGE_MASK;
+  unsigned long size = ((unsigned long)virt_to) - virt;
+  phys_addr_t phys = hyp_virt_to_phys((void*)virt);
+  _Bool ret = _check_hyp_mapping(pgd, (void*)virt, size, phys, prot);
   return ret;
 }
+
+
+
+  
+_Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+{
+  _Bool check_hyp_mapping_image = check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_text_start),
+						    hyp_symbol_addr(__hyp_text_end),
+						    PAGE_HYP_EXEC)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__start_rodata),
+			 hyp_symbol_addr(__end_rodata), PAGE_HYP_RO)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_data_ro_after_init_start),
+			 hyp_symbol_addr(__hyp_data_ro_after_init_end),
+			 PAGE_HYP_RO)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__bss_start),
+			 hyp_symbol_addr(__hyp_bss_end), PAGE_HYP)
+    
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_bss_end),
+			 hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
+
+  // ...and we need to check the contents of all of those w.r.t. the
+  // image file (modulo relocations and alternatives)
+
+
+  // adapting hyp_create_idmap from   arch/arm64/kvm/hyp/nvhe/mm.c 
+  unsigned long start, end;
+
+  start = (unsigned long)hyp_symbol_addr(__hyp_idmap_text_start);
+  start = hyp_virt_to_phys((void *)start);
+  start = ALIGN_DOWN(start, PAGE_SIZE);
+
+  end = (unsigned long)hyp_symbol_addr(__hyp_idmap_text_end);
+  end = hyp_virt_to_phys((void *)end);
+  end = ALIGN(end, PAGE_SIZE);
+
+  _Bool check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
+
+  
+  //  _Bool check_hyp_mapping_percpu;
+  //  {
+  //    _Bool acc=true;
+  //    int i;
+  //    void *start, *end;
+  //    for (i = 0; i < nr_cpus; i++) {
+  //      start = (void *)kern_hyp_va(per_cpu_base[i]);
+  //      end = start + PAGE_ALIGN(hyp_percpu_size);
+  //      acc = acc && check_hyp_mapping(pgd, start, end, PAGE_HYP);
+  //    }
+  //    check_hyp_mapping_percpu = acc;
+  //  }
+
+  
+  _Bool check_hyp_mapping_workspace = check_hyp_mapping(pgd, virt, virt + size - 1, PAGE_HYP);
+  // AIUI this is all the working memory we've been handed.
+  // divide_memory_pool chops it up into per-cpu stacks_base,
+  // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
+  // host_s2_dev_pgt_base; then the remainder (after the switch) is
+  // handed to the buddy allocator (we might want to check those
+  // pieces separately, btw). So why is the percpu stuff separate??
+    
+
+
+
+
+  
+  _Bool ret = check_hyp_mapping_image
+    //    && check_hyp_mapping_percpu
+    && check_hyp_mapping_idmap
+    && check_hyp_mapping_workspace;
+    
+  return ret;
+}
+
+
+// check putative mappings as described in hyp_pgtable, before the
+// switch.  After the switch, we can do the same but using the
+// then-current TTBR0_EL2 value
+
+_Bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+{
+  kvm_pte_t * pgd = hyp_pgtable.pgd;
+  void *virt = hyp_phys_to_virt(phys);
+  return _check_hyp_mappings(pgd, virt, size, nr_cpus, per_cpu_base);
+}
+  

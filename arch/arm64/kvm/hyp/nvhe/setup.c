@@ -237,7 +237,7 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
 
         // PS HACK
 	// check sample property of the putative mapping
-	_Bool check = check_hyp_mappings();
+	_Bool check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
 	// can't actually output the result yet, as I've not got the uart working in QEMU
 
 	// PS HACK
