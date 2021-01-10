@@ -151,6 +151,12 @@ static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
 			return ret;
 	}
 
+
+	// PS HACK
+		hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');
+		dump_hyp_mappings(hyp_pgtable);
+		
+	
 	ret = create_hyp_debug_uart_mapping();
 	if (ret)
 		return ret;
@@ -237,9 +243,12 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
 
         // PS HACK
 	// check sample property of the putative mapping
-	_Bool check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
+        //
+	// _Bool check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
+        //
 	// can't actually output the result yet, as I've not got the uart working in QEMU
-
+        // and just trying to execute it hangs in any case 
+	
 	// PS HACK
 	//	hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');
 	

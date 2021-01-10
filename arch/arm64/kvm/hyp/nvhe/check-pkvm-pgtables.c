@@ -38,6 +38,9 @@
 #include <nvhe/mm.h>
 #include <linux/bits.h>
 
+#include <asm/kvm_mmu.h>
+#include <../debug-pl011.h>
+
 
 // the per-cpu check needs 
 //   kern_hyp_va from arch/arm64/include/asm/kvm_mmu.h
@@ -47,6 +50,173 @@
 
 // It may be that we need to remember some of these values in a more
 // convenient location anyhow.
+
+
+
+/* ************************************************************************** */
+/* 
+ * experiment in style: pretty-print of Armv8-A page tables that can run in the EL2 code
+ */
+
+// "plain" versions of some debug-pl011.h functions, without the trailing \n
+void hyp_putsp(char *s)
+{
+  while (*s)
+    hyp_putc(*s++);
+}
+
+static inline void __hyp_putx4np(unsigned long x, int n)
+{
+	int i = n >> 2;
+
+	hyp_putc('0');
+	hyp_putc('x');
+
+	while (i--)
+		__hyp_putx4(x >> (4 * i));
+
+}
+
+
+
+
+void hyp_putsxn(char *s, unsigned long x, int n)
+{
+  hyp_putsp(s);
+  hyp_putc(':');
+  __hyp_putx4np(x,n);
+  hyp_putc(' ');
+}
+
+
+
+// the logical entry kinds
+enum entry_kind {
+  EK_INVALID,
+  EK_BLOCK,
+  EK_TABLE,
+  EK_PAGE_DESCRIPTOR,
+  EK_BLOCK_NOT_PERMITTED,
+  EK_RESERVED,
+  EK_DUMMY
+};
+
+// the entry kind bit representations
+#define ENTRY_INVALID_0 0
+#define ENTRY_INVALID_2 2
+#define ENTRY_BLOCK 1
+#define ENTRY_RESERVED 1
+#define ENTRY_PAGE_DESCRIPTOR 3
+#define ENTRY_TABLE 3
+
+
+void hyp_put_ek(enum entry_kind ek)
+{
+  switch(ek)
+    {
+    case EK_INVALID:               hyp_putsp("EK_INVALID");             break;
+    case EK_BLOCK:		   hyp_putsp("EK_BLOCK");	       break;	 
+    case EK_TABLE:		   hyp_putsp("EK_TABLE");	       break;	 
+    case EK_PAGE_DESCRIPTOR:	   hyp_putsp("EK_PAGE_DESCRIPTOR");     break;	 
+    case EK_BLOCK_NOT_PERMITTED:   hyp_putsp("EK_BLOCK_NOT_PERMITTED"); break;
+    case EK_RESERVED:		   hyp_putsp("EK_RESERVED");	       break;	 
+    case EK_DUMMY:                 hyp_putsp("EK_DUMMY");               break;
+    }
+}
+
+// 
+enum entry_kind entry_kind(kvm_pte_t pte, u32 level)
+{
+  switch(level)
+    {
+    case 0:
+    case 1:
+    case 2:
+      {
+	switch (pte & GENMASK(1,0))
+	  {
+	  case ENTRY_INVALID_0: 
+	  case ENTRY_INVALID_2:
+	    return EK_INVALID;
+	  case ENTRY_BLOCK:
+	    switch (level)
+	      {
+	      case 0:
+		return EK_BLOCK_NOT_PERMITTED;
+	      case 1:
+	      case 2:
+		return EK_BLOCK;
+	      }
+	  case ENTRY_TABLE: 
+	    return EK_TABLE;
+	  default:
+	    return EK_DUMMY; // this is just to tell the compiler that the cases are exhaustive
+	  }
+      }
+    case 3: 
+      switch (pte & GENMASK(1,0))
+	{
+	case ENTRY_INVALID_0:
+	case ENTRY_INVALID_2:
+	  return EK_INVALID;
+	case ENTRY_RESERVED:
+	  return EK_RESERVED;
+	case ENTRY_PAGE_DESCRIPTOR:
+	  return EK_PAGE_DESCRIPTOR;
+	}
+    
+    default:
+      return EK_DUMMY; // this is just to tell the compiler that the cases are exhaustive
+    }
+}
+
+
+// dump page starting at pgd, and any sub-pages
+void _dump_hyp_mappings(u64 *pgd, u32 level)
+{
+    u32 idx;
+    if (pgd) {
+      // dump this page
+      hyp_putsxn("table at", (u64)pgd, 64); hyp_puts("");
+      for (idx = 0; idx < 512; idx++) {
+	kvm_pte_t pte = pgd[idx];
+	hyp_putsxn("level",level,32);
+	hyp_putsxn("entry at",(u64)(pgd+idx),64);
+	hyp_putsxn("raw",(u64)pte,64);
+	enum entry_kind ek;
+	ek = entry_kind(pte, level);       
+	hyp_put_ek(ek);
+	
+	hyp_puts("");
+      }
+      // dump any sub-pages
+      for (idx = 0; idx < 512; idx++) {
+	kvm_pte_t pte = pgd[idx];
+	if (entry_kind(pte, level) == EK_TABLE) {
+	  u64 next_level_address;
+	  next_level_address = pte & GENMASK(47,12);
+	  hyp_putsxn("table", next_level_address, 64);
+	  // TODO: need to futz with address, which is wrt the ultimate hypervisor mapping, to make it wrt the current mapping?
+	  _dump_hyp_mappings((kvm_pte_t *)next_level_address, level+1);
+	}
+      }
+    }
+    else {
+      hyp_puts("table address null");
+    }
+}
+
+
+void dump_hyp_mappings(struct kvm_pgtable pg)
+{
+  hyp_putsxn("ia_bits", pg.ia_bits, 32);
+  hyp_putsxn("ia_start_level", pg.start_level, 32);
+  hyp_puts("");
+  _dump_hyp_mappings(pg.pgd, pg.start_level);
+  
+  return;
+}
+
 
 
 /* ************************************************************************** */
@@ -163,11 +333,7 @@ struct TLBRecord mkTranslation(uint64_t vaddress, uint64_t pa) {
 }
 
 
-#define ENTRY_INVALID_0 0
-#define ENTRY_INVALID_2 2
-#define ENTRY_BLOCK 1
-#define ENTRY_PAGE_DESCRIPTOR 3
-#define ENTRY_TABLE 3
+
 
 struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t level, uint64_t vaddress);
 
@@ -206,6 +372,7 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
     
     case 0:
     case 1:
+
     case 2:
       {
 	switch (pte & GENMASK(1,0))
@@ -228,7 +395,7 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
 	      table_base_next = pte & GENMASK(47,12); 
 	      return AArch64_TranslationTableWalk(table_base_next, level+1, vaddress);
 	    }
-	default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
+	  default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
 	  }
       }
     default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
@@ -305,8 +472,7 @@ _Bool _check_hyp_mapping(kvm_pte_t *pgd, void *virt, uint64_t size, phys_addr_t 
   return ret;
 }
 
-
-// check a range  virt_from..virt_to |-> (..the physical addresses given by hyp_virt_to_phys..., prot)
+// check a range  virt_from..virt_to |-> (..the physical addresses given by hyp_virt_to_phys..., prot) in the pagetables at pgd
 _Bool check_hyp_mapping(kvm_pte_t *pgd, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
   unsigned long virt = (unsigned long)virt_from & PAGE_MASK;
@@ -318,31 +484,11 @@ _Bool check_hyp_mapping(kvm_pte_t *pgd, void *virt_from, void *virt_to, enum kvm
 
 
 
-  
+// check all the pKVM mappings  
 _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
-  _Bool check_hyp_mapping_image = check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_text_start),
-						    hyp_symbol_addr(__hyp_text_end),
-						    PAGE_HYP_EXEC)
 
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__start_rodata),
-			 hyp_symbol_addr(__end_rodata), PAGE_HYP_RO)
-
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_data_ro_after_init_start),
-			 hyp_symbol_addr(__hyp_data_ro_after_init_end),
-			 PAGE_HYP_RO)
-
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__bss_start),
-			 hyp_symbol_addr(__hyp_bss_end), PAGE_HYP)
-    
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_bss_end),
-			 hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
-
-  // ...and we need to check the contents of all of those w.r.t. the
-  // image file (modulo relocations and alternatives)
-
-
-  // adapting hyp_create_idmap from   arch/arm64/kvm/hyp/nvhe/mm.c 
+  // - the idmap, adapting hyp_create_idmap from   arch/arm64/kvm/hyp/nvhe/mm.c 
   unsigned long start, end;
 
   start = (unsigned long)hyp_symbol_addr(__hyp_idmap_text_start);
@@ -355,7 +501,50 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
 
   _Bool check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
 
+  // - the vectors
+
+  // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in mm.c, which uses __hyp_create_priave_mapping there to do some spectre-hardened mapping of `__bp_harden_hyp_vecs` (in `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion of "private mapping" is - and don't want to think about that right now.
   
+  // - the rest of the image
+  _Bool check_hyp_mapping_image
+    =  check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_text_start),
+			 hyp_symbol_addr(__hyp_text_end),
+			 PAGE_HYP_EXEC)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__start_rodata),
+			 hyp_symbol_addr(__end_rodata), PAGE_HYP_RO)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_data_ro_after_init_start),
+			 hyp_symbol_addr(__hyp_data_ro_after_init_end),
+			 PAGE_HYP_RO)
+
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__bss_start),
+			 hyp_symbol_addr(__hyp_bss_end), PAGE_HYP)
+    
+    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_bss_end),
+			 hyp_symbol_addr(__bss_stop), PAGE_HYP_RO)
+
+    && check_hyp_mapping_idmap;
+
+  // ...and we need to check the contents of all of those is what we
+  // expect from the image file (modulo relocations and alternatives)
+
+
+
+
+  // - the non-per-cpu workspace handed from Linux
+  _Bool check_hyp_mapping_workspace = check_hyp_mapping(pgd, virt, virt + size - 1, PAGE_HYP);
+  // AIUI this is all the working memory we've been handed.
+  // divide_memory_pool chops it up into per-cpu stacks_base,
+  // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
+  // host_s2_dev_pgt_base; then the remainder (after the switch) is
+  // handed to the buddy allocator (we might want to check those
+  // pieces separately, btw). So why is the percpu stuff separate??
+    
+
+  
+  
+  // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
   //  _Bool check_hyp_mapping_percpu;
   //  {
   //    _Bool acc=true;
@@ -369,32 +558,23 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
   //    check_hyp_mapping_percpu = acc;
   //  }
 
-  
-  _Bool check_hyp_mapping_workspace = check_hyp_mapping(pgd, virt, virt + size - 1, PAGE_HYP);
-  // AIUI this is all the working memory we've been handed.
-  // divide_memory_pool chops it up into per-cpu stacks_base,
-  // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
-  // host_s2_dev_pgt_base; then the remainder (after the switch) is
-  // handed to the buddy allocator (we might want to check those
-  // pieces separately, btw). So why is the percpu stuff separate??
-    
 
-
-
-
-  
-  _Bool ret = check_hyp_mapping_image
-    //    && check_hyp_mapping_percpu
-    && check_hyp_mapping_idmap
+ 
+  _Bool ret
+    =  check_hyp_mapping_image
     && check_hyp_mapping_workspace;
-    
+    //    && check_hyp_mapping_percpu
+
+  // and we need disjointness of most of these.  Disjointness in a world with address translation is interesting... and there's also read-only-ness and execute permissions to be taken into account
+
+  
   return ret;
 }
 
 
 // check putative mappings as described in hyp_pgtable, before the
 // switch.  After the switch, we can do the same but using the
-// then-current TTBR0_EL2 value
+// then-current TTBR0_EL2 value instead of the hyp_pgtable.pgd
 
 _Bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
