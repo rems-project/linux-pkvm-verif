@@ -109,23 +109,8 @@ enum entry_kind {
 #define ENTRY_PAGE_DESCRIPTOR 3
 #define ENTRY_TABLE 3
 
-
-void hyp_put_ek(enum entry_kind ek)
-{
-  switch(ek)
-    {
-    case EK_INVALID:               hyp_putsp("EK_INVALID");             break;
-    case EK_BLOCK:		   hyp_putsp("EK_BLOCK");	       break;	 
-    case EK_TABLE:		   hyp_putsp("EK_TABLE");	       break;	 
-    case EK_PAGE_DESCRIPTOR:	   hyp_putsp("EK_PAGE_DESCRIPTOR");     break;	 
-    case EK_BLOCK_NOT_PERMITTED:   hyp_putsp("EK_BLOCK_NOT_PERMITTED"); break;
-    case EK_RESERVED:		   hyp_putsp("EK_RESERVED");	       break;	 
-    case EK_DUMMY:                 hyp_putsp("EK_DUMMY");               break;
-    }
-}
-
 // 
-enum entry_kind entry_kind(kvm_pte_t pte, u32 level)
+enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
 {
   switch(level)
     {
@@ -171,33 +156,72 @@ enum entry_kind entry_kind(kvm_pte_t pte, u32 level)
 }
 
 
+void hyp_put_ek(enum entry_kind ek)
+{
+  switch(ek)
+    {
+    case EK_INVALID:               hyp_putsp("EK_INVALID");             break;
+    case EK_BLOCK:		   hyp_putsp("EK_BLOCK");	       break;	 
+    case EK_TABLE:		   hyp_putsp("EK_TABLE");	       break;	 
+    case EK_PAGE_DESCRIPTOR:	   hyp_putsp("EK_PAGE_DESCRIPTOR");     break;	 
+    case EK_BLOCK_NOT_PERMITTED:   hyp_putsp("EK_BLOCK_NOT_PERMITTED"); break;
+    case EK_RESERVED:		   hyp_putsp("EK_RESERVED");	       break;	 
+    case EK_DUMMY:                 hyp_putsp("EK_DUMMY");               break;
+    }
+}
+
+void hyp_put_entry(kvm_pte_t pte, u8 level)
+{
+  enum entry_kind ek;
+  ek = entry_kind(pte, level);       
+  hyp_put_ek(ek); hyp_putsp(" ");
+  switch(ek)
+    {
+    case EK_INVALID:               break;
+    case EK_BLOCK:		   break;	 
+    case EK_TABLE:		   break;	 
+    case EK_PAGE_DESCRIPTOR:
+      { u64 oa;
+	oa = pte & GENMASK(47,12);
+	hyp_putsxn("oa", oa, 64);
+      }
+      break;	 
+    case EK_BLOCK_NOT_PERMITTED:   break;
+    case EK_RESERVED:		   break;	 
+    case EK_DUMMY:                 break;
+    }
+
+}
+
+
+
 // dump page starting at pgd, and any sub-pages
-void _dump_hyp_mappings(u64 *pgd, u32 level)
+void _dump_hyp_mappings(u64 *pgd, u8 level)
 {
     u32 idx;
     if (pgd) {
       // dump this page
-      hyp_putsxn("table at", (u64)pgd, 64); hyp_puts("");
+      hyp_putsxn("level",level,8);
+      hyp_putsxn("table at virt", (u64)pgd, 64); hyp_puts("");
       for (idx = 0; idx < 512; idx++) {
 	kvm_pte_t pte = pgd[idx];
-	hyp_putsxn("level",level,32);
-	hyp_putsxn("entry at",(u64)(pgd+idx),64);
+	hyp_putsxn("level",level,8);
+	hyp_putsxn("entry at virt",(u64)(pgd+idx),64);
 	hyp_putsxn("raw",(u64)pte,64);
-	enum entry_kind ek;
-	ek = entry_kind(pte, level);       
-	hyp_put_ek(ek);
-	
+	hyp_put_entry(pte, level);
 	hyp_puts("");
       }
       // dump any sub-pages
       for (idx = 0; idx < 512; idx++) {
 	kvm_pte_t pte = pgd[idx];
 	if (entry_kind(pte, level) == EK_TABLE) {
-	  u64 next_level_address;
-	  next_level_address = pte & GENMASK(47,12);
-	  hyp_putsxn("table", next_level_address, 64);
-	  // TODO: need to futz with address, which is wrt the ultimate hypervisor mapping, to make it wrt the current mapping?
-	  _dump_hyp_mappings((kvm_pte_t *)next_level_address, level+1);
+	  u64 next_level_phys_address, next_level_virt_address;
+	  next_level_phys_address = pte & GENMASK(47,12);
+	  next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
+	  hyp_putsxn("table phys", next_level_phys_address, 64);
+	  hyp_putsxn("table virt", next_level_virt_address, 64);
+	  _dump_hyp_mappings((kvm_pte_t *)next_level_virt_address, level+1);
+	  hyp_puts("");
 	}
       }
     }
@@ -499,7 +523,8 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
   end = hyp_virt_to_phys((void *)end);
   end = ALIGN(end, PAGE_SIZE);
 
-  _Bool check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
+  _Bool check_hyp_mapping_idmap;
+  check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
 
   // - the vectors
 
