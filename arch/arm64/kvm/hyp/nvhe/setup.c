@@ -88,7 +88,8 @@ static int divide_memory_pool(void *virt, unsigned long size)
 }
 
 static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
-				 unsigned long *per_cpu_base)
+				 unsigned long *per_cpu_base, unsigned long nr_cpus)
+// PS HACK: passed nr_cpus in as checking here to be before the uart faff
 {
 	void *start, *end, *virt = hyp_phys_to_virt(phys);
 	int ret, i;
@@ -155,7 +156,13 @@ static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
 	// PS HACK
 		hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');
 		dump_hyp_mappings(hyp_pgtable);
-		
+
+		        // PS HACK
+	// check sample property of the putative mapping
+        //
+		_Bool check;
+		check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
+
 	
 	ret = create_hyp_debug_uart_mapping();
 	if (ret)
@@ -234,7 +241,7 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
 	if (ret)
 		return ret;
 
-	ret = recreate_hyp_mappings(phys, size, per_cpu_base);
+	ret = recreate_hyp_mappings(phys, size, per_cpu_base, nr_cpus);
 	if (ret)
 		return ret;
 
@@ -244,10 +251,7 @@ int __kvm_hyp_protect(phys_addr_t phys, unsigned long size,
         // PS HACK
 	// check sample property of the putative mapping
         //
-	// _Bool check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
-        //
-	// can't actually output the result yet, as I've not got the uart working in QEMU
-        // and just trying to execute it hangs in any case 
+	//	_Bool check = check_hyp_mappings(phys, size, nr_cpus, per_cpu_base);
 	
 	// PS HACK
 	//	hyp_putc('P');hyp_putc('S');hyp_putc('H');hyp_putc('A');hyp_putc('C');hyp_putc('k');hyp_putc('\n');

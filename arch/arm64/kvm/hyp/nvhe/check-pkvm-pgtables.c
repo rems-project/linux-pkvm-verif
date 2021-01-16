@@ -65,6 +65,12 @@ void hyp_putsp(char *s)
     hyp_putc(*s++);
 }
 
+void hyp_putbool(_Bool b)
+{
+  if (b) hyp_putsp("true"); else hyp_putsp("false");
+}
+
+
 static inline void __hyp_putx4np(unsigned long x, int n)
 {
 	int i = n >> 2;
@@ -362,11 +368,11 @@ struct TLBRecord mkTranslation(uint64_t vaddress, uint64_t pa) {
 struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t level, uint64_t vaddress);
 
 struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t level, uint64_t vaddress) {
-  // these two should be combined with their initialisations below, but
-  // the compiler complains that ISO C90 forbids mixed declations and
-  // code
+  // in pure-ish C style, these should really be combined with their
+  // initialisations below, but the compiler complains that ISO C90
+  // forbids mixed declations and code
   uint64_t pte;            
-  uint64_t table_base_next;
+  uint64_t table_base_next_virt, table_base_next_phys;
 	      
   uint64_t offset = 0; // offset in bytes of entry from table_base
   switch (level) {
@@ -416,8 +422,10 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
 	      }
 	  case ENTRY_TABLE: // recurse
 	    {
-	      table_base_next = pte & GENMASK(47,12); 
-	      return AArch64_TranslationTableWalk(table_base_next, level+1, vaddress);
+	      table_base_next_phys = pte & GENMASK(47,12); 
+	      table_base_next_virt = (u64)hyp_phys_to_virt((phys_addr_t)table_base_next_phys);
+	  
+	      return AArch64_TranslationTableWalk(table_base_next_virt, level+1, vaddress);
 	    }
 	  default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
 	  }
@@ -497,19 +505,26 @@ _Bool _check_hyp_mapping(kvm_pte_t *pgd, void *virt, uint64_t size, phys_addr_t 
 }
 
 // check a range  virt_from..virt_to |-> (..the physical addresses given by hyp_virt_to_phys..., prot) in the pagetables at pgd
-_Bool check_hyp_mapping(kvm_pte_t *pgd, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+_Bool check_hyp_mapping(kvm_pte_t *pgd, char * doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
-  unsigned long virt = (unsigned long)virt_from & PAGE_MASK;
-  unsigned long size = ((unsigned long)virt_to) - virt;
-  phys_addr_t phys = hyp_virt_to_phys((void*)virt);
-  _Bool ret = _check_hyp_mapping(pgd, (void*)virt, size, phys, prot);
+  unsigned long virt;
+  unsigned long size;
+  phys_addr_t phys;
+  bool ret;
+  
+  hyp_putsp("check_hyp_mapping "); hyp_putsp(doc); hyp_putsxn("virt_from",(u64)virt_from, 64);
+  virt = (unsigned long)virt_from & PAGE_MASK;
+  size = ((unsigned long)virt_to) - virt;
+  phys = hyp_virt_to_phys((void*)virt);
+  ret = _check_hyp_mapping(pgd, (void*)virt, size, phys, prot);
+  hyp_putbool(ret); hyp_puts("");
   return ret;
 }
 
 
 
 // check all the pKVM mappings  
-_Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
 
   // - the idmap, adapting hyp_create_idmap from   arch/arm64/kvm/hyp/nvhe/mm.c 
@@ -523,7 +538,7 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
   end = hyp_virt_to_phys((void *)end);
   end = ALIGN(end, PAGE_SIZE);
 
-  _Bool check_hyp_mapping_idmap;
+  bool check_hyp_mapping_idmap;
   check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
 
   // - the vectors
@@ -531,22 +546,22 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
   // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in mm.c, which uses __hyp_create_priave_mapping there to do some spectre-hardened mapping of `__bp_harden_hyp_vecs` (in `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion of "private mapping" is - and don't want to think about that right now.
   
   // - the rest of the image
-  _Bool check_hyp_mapping_image
-    =  check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_text_start),
+  bool check_hyp_mapping_image
+    =  check_hyp_mapping(pgd, "hyp_symbol_addr(__hyp_text_start)", hyp_symbol_addr(__hyp_text_start),
 			 hyp_symbol_addr(__hyp_text_end),
 			 PAGE_HYP_EXEC)
 
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__start_rodata),
+    && check_hyp_mapping(pgd, "hyp_symbol_addr(__start_rodata)", hyp_symbol_addr(__start_rodata),
 			 hyp_symbol_addr(__end_rodata), PAGE_HYP_RO)
 
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_data_ro_after_init_start),
+    && check_hyp_mapping(pgd, "hyp_symbol_addr(__hyp_data_ro_after_init_start)", hyp_symbol_addr(__hyp_data_ro_after_init_start),
 			 hyp_symbol_addr(__hyp_data_ro_after_init_end),
 			 PAGE_HYP_RO)
 
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__bss_start),
+    && check_hyp_mapping(pgd, "hyp_symbol_addr(__bss_start)", hyp_symbol_addr(__bss_start),
 			 hyp_symbol_addr(__hyp_bss_end), PAGE_HYP)
     
-    && check_hyp_mapping(pgd, hyp_symbol_addr(__hyp_bss_end),
+    && check_hyp_mapping(pgd, "hyp_symbol_addr(__hyp_bss_end)", hyp_symbol_addr(__hyp_bss_end),
 			 hyp_symbol_addr(__bss_stop), PAGE_HYP_RO)
 
     && check_hyp_mapping_idmap;
@@ -558,7 +573,7 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
 
 
   // - the non-per-cpu workspace handed from Linux
-  _Bool check_hyp_mapping_workspace = check_hyp_mapping(pgd, virt, virt + size - 1, PAGE_HYP);
+  bool check_hyp_mapping_workspace = check_hyp_mapping(pgd, "non-per-cpu workspace", virt, virt + size - 1, PAGE_HYP);
   // AIUI this is all the working memory we've been handed.
   // divide_memory_pool chops it up into per-cpu stacks_base,
   // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
@@ -570,9 +585,9 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
   
   
   // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
-  //  _Bool check_hyp_mapping_percpu;
+  //  bool check_hyp_mapping_percpu;
   //  {
-  //    _Bool acc=true;
+  //    bool acc=true;
   //    int i;
   //    void *start, *end;
   //    for (i = 0; i < nr_cpus; i++) {
@@ -585,7 +600,7 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
 
 
  
-  _Bool ret
+  bool ret
     =  check_hyp_mapping_image
     && check_hyp_mapping_workspace;
     //    && check_hyp_mapping_percpu
@@ -601,10 +616,12 @@ _Bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr
 // switch.  After the switch, we can do the same but using the
 // then-current TTBR0_EL2 value instead of the hyp_pgtable.pgd
 
-_Bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
-  kvm_pte_t * pgd = hyp_pgtable.pgd;
-  void *virt = hyp_phys_to_virt(phys);
+  kvm_pte_t * pgd;
+  void *virt;
+   pgd = hyp_pgtable.pgd;
+  virt = hyp_phys_to_virt(phys);
   return _check_hyp_mappings(pgd, virt, size, nr_cpus, per_cpu_base);
 }
   
