@@ -508,7 +508,8 @@ void hyp_put_prot(enum kvm_pgtable_prot prot)
   if (prot & KVM_PGTABLE_PROT_X) hyp_putc('X'); else hyp_putc('-');
   hyp_putsp(" ");
 }
-
+100000000000000011110001100000000110000000000000
+               111111111111000000111000000000000
     
 void hyp_put_mapping_kind(enum mapping_kind kind)
 {
@@ -660,6 +661,101 @@ _Bool __check_hyp_mappings(kvm_pte_t *pgd)
 }
 
 
+// check all the mappings in the pagetables at `pgd` are included in those recorded in `mappings`
+
+// mathematically one would do this with a single quantification over
+// all virtual addresses, using the Arm ASL translate function for
+// each, but that would take too long to execute.  So we have to
+// duplicate some of the walk code.  We could reuse pgtable.c here -
+// but we want an independent definition that eventually we can prove
+// relates to the Arm ASL.  For now, I'll just hack something up,
+// adapting my earlier hacked-up version of the walk code.
+
+// At a higher level, instead of doing two inclusion checks, we could
+// compute a more explicit representation of the denotation of a page
+// table and of the collection of mappings and check equality, but
+// that would be more algorithmically complex and involve more
+// allocation.
+
+// check (virt,phys) in at least one of the `mappings`
+_Bool ___check_hyp_mappings_rev(u64 virt, phys_addr_t phys)
+{
+  int i;
+  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
+    if (mappings[i].kind != HYP_NULL)
+      {
+	//TODO
+	if //(virt >= mappings[i].virt && virt < mappings[i].virt + PAGE_SIZE*mappings[i].size && phys == mappings[i].phys + (virt - mappings[i].virt)) {
+	  (phys >= mappings[i].phys && phys < mappings[i].phys + PAGE_SIZE*mappings[i].size) {
+	  hyp_put_mapping_kind(mappings[i].kind);
+	  hyp_putc(' ');
+	  return true;
+	}
+      }
+  }
+  hyp_putsp("not found ");
+  return false;
+}
+
+_Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial);
+_Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial) 
+{
+  bool ret, entry;
+  u64 idx;
+  u64 va_new;
+  kvm_pte_t pte;
+  enum entry_kind ek;
+  u64 next_level_phys_address, next_level_virt_address;
+
+  ret = true;
+  for (idx = 0; idx < 512; idx++) {
+    switch (level) {
+    case 0: va_new = idx << 39; break;
+    case 1: va_new = idx << 30; break;
+    case 2: va_new = idx << 21; break;
+    case 3: va_new = idx << 12; break;
+    default: hyp_puts("unhandled level"); // this is just to tell the compiler that the cases are exhaustive
+    }
+    va_partial |= va_new;
+      
+    pte = pgd[idx];
+    
+    ek = entry_kind(pte, level);       
+    switch(ek)
+      {
+      case EK_INVALID:             entry = true; break;
+      case EK_BLOCK:		   hyp_putsp("unhandled EK_BLOCK"); entry = false; break;
+      case EK_TABLE:
+	next_level_phys_address = pte & GENMASK(47,12);
+	next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
+	// hyp_putsxn("table phys", next_level_phys_address, 64);
+	//hyp_putsxn("table virt", next_level_virt_address, 64);
+	entry =__check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial); break;
+      case EK_PAGE_DESCRIPTOR:
+	{ u64 oa;
+	  oa = pte & GENMASK(47,12);
+	  //hyp_putsxn("oa", oa, 64);
+	  // now check (va_partial, oa) is in one of the mappings  (ignore prot for now, but should check)
+	  hyp_putsp("__check_hyp_mappings_rev "); hyp_putsxn("va", va_partial, 64); hyp_putsxn("oa", oa, 64);
+	  entry = ___check_hyp_mappings_rev(va_partial, oa);
+	  hyp_putbool(entry);
+	  hyp_putc('\n');
+
+	}
+	break;	 
+      case EK_BLOCK_NOT_PERMITTED:  hyp_putsp("unhandled EK_BLOCK_NOT_PERMITTED"); entry = false; break;
+      case EK_RESERVED:		   hyp_putsp("unhandled EK_RESERVED"); entry = false; break;
+      case EK_DUMMY:               hyp_putsp("unhandled EK_DUMMY"); entry = false; break;
+      default:            hyp_putsp("unhandled default"); entry = false; break;
+      }
+    ret = ret && entry;
+  }
+  return ret;
+}
+
+
+
+
 
 // record and check all the pKVM mappings  
 bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
@@ -745,7 +841,7 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
 
   hyp_put_mappings();
 
-  ret = __check_hyp_mappings(pgd);
+  ret = __check_hyp_mappings(pgd) &&  __check_hyp_mappings_rev(pgd, 0, 0);
 
 
 
