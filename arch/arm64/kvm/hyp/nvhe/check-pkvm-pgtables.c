@@ -508,12 +508,12 @@ void hyp_put_prot(enum kvm_pgtable_prot prot)
 void hyp_put_mapping_kind(enum mapping_kind kind)
 {
   switch (kind) {
-    case HYP_TEXT:        hyp_putsp("HYP_TEXT"); break;
-    case HYP_RODATA:	  hyp_putsp("HYP_RODATA"); break;
-    case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2"); break;
-    case HYP_BSS:	  hyp_putsp("HYP_BSS"); break;
-    case HYP_BSS2:	  hyp_putsp("HYP_BSS2"); break;
-    case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP"); break;
+    case HYP_TEXT:        hyp_putsp("HYP_TEXT     "); break;
+    case HYP_RODATA:	  hyp_putsp("HYP_RODATA   "); break;
+    case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2  "); break;
+    case HYP_BSS:	  hyp_putsp("HYP_BSS      "); break;
+    case HYP_BSS2:	  hyp_putsp("HYP_BSS2     "); break;
+    case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP    "); break;
     case HYP_WORKSPACE:	  hyp_putsp("HYP_WORKSPACE"); break;
     default: hyp_putsp("unknown mapping kind"); break;
   }
@@ -532,24 +532,28 @@ void hyp_put_mapping(struct mapping *map)
     hyp_put_mapping_kind(map->kind);
     hyp_putsp(map->doc);
   }
-  hyp_putc('\n');
 }
 
 void hyp_put_mappings(void)
 {
   int i;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++)
+  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
     hyp_put_mapping(&mappings[i]);
+    hyp_putc('\n');
+  }
 }
+  
     
 
-void record_hyp_mapping_image_part(enum mapping_kind kind, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+// record a mapping for a range of hypervisor virtual addresses 
+void record_hyp_mapping_virt(enum mapping_kind kind, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
-  u64 virt_from_aligned;
+  u64 virt_from_aligned, virt_to_aligned;
   u64 size;
   phys_addr_t phys;
   virt_from_aligned = (u64)virt_from & PAGE_MASK;
-  size = (((u64)virt_to) - virt_from_aligned) >> PAGE_SHIFT;  // TODO: that's a bit wrong
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
   phys = hyp_virt_to_phys((void*)virt_from_aligned);
 
   mappings[kind].doc = doc;
@@ -561,18 +565,20 @@ void record_hyp_mapping_image_part(enum mapping_kind kind, char *doc, void *virt
 }
 
 
+// record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
 void record_hyp_mapping_image_idmap(enum mapping_kind kind, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
-  u64 virt_from_aligned;
+  u64 virt_from_aligned, virt_to_aligned;
   u64 size;
   phys_addr_t phys;
   virt_from_aligned = (u64)virt_from & PAGE_MASK;
-  size = (((u64)virt_to) - virt_from_aligned) >> PAGE_SHIFT;
-  phys = virt_from_aligned;
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+  phys = hyp_virt_to_phys((void*)virt_from_aligned);
 
   mappings[kind].doc = doc;
   mappings[kind].kind = kind;
-  mappings[kind].virt = virt_from_aligned;
+  mappings[kind].virt = phys; 
   mappings[kind].phys = phys;
   mappings[kind].size = size;
   mappings[kind].prot = prot;
@@ -591,7 +597,7 @@ void record_hyp_mapping_image_idmap(enum mapping_kind kind, char *doc, void *vir
  */
 
 
-// check a specific virt |-> (phys,prot) in the pagetables at pgd
+// check a specific virt |-> (phys,prot) is included in the pagetables at pgd
 _Bool _check_hyp_mapping(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
 
@@ -606,98 +612,103 @@ _Bool _check_hyp_mapping(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pg
     }
 }
 
-// check the mapping range of pages in the pagetables at pgd
+// check the `mapping` range of pages are included in the pagetables at `pgd`
 _Bool check_hyp_mapping(kvm_pte_t *pgd, struct mapping *mapping)
 {
   u64 i;
   bool ret;
   
-  hyp_putsp("check_hyp_mapping "); hyp_put_mapping(mapping);
+  hyp_putsp("check_hyp_mapping "); 
   ret = true;
   for (i=0; i<mapping->size; i++) 
     ret &= _check_hyp_mapping(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
-  hyp_putbool(ret); hyp_putc('\n');
+  hyp_putbool(ret);
+  hyp_putc(' ');
+  hyp_put_mapping(mapping);
+  hyp_putc('\n');
+  return ret;
+}
+
+
+// check all the mappings recorded in `mappings` are included in the pagetables at `pgd`
+_Bool __check_hyp_mappings(kvm_pte_t *pgd)
+{
+  bool ret;
+  u64 i;
+  ret = true;
+  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
+    if (mappings[i].kind != HYP_NULL)
+      ret &= check_hyp_mapping(pgd,&mappings[i]);
+  }
   return ret;
 }
 
 
 
-// check all the pKVM mappings  
-bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+// record and check all the pKVM mappings  
+bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
 
-  u64 i;
   bool ret;
-  
-  // - the idmap, adapting hyp_create_idmap from   arch/arm64/kvm/hyp/nvhe/mm.c 
-//  unsigned long start, end;
-//  bool check_hyp_mapping_idmap;
-//
-//  start = (unsigned long)hyp_symbol_addr(__hyp_idmap_text_start);
-//  start = hyp_virt_to_phys((void *)start);
-//  start = ALIGN_DOWN(start, PAGE_SIZE);
-//
-//  end = (unsigned long)hyp_symbol_addr(__hyp_idmap_text_end);
-//  end = hyp_virt_to_phys((void *)end);
-//  end = ALIGN(end, PAGE_SIZE);
-//
-//  check_hyp_mapping_idmap = _check_hyp_mapping(pgd, (void*)start, end - start, (phys_addr_t)start, PAGE_HYP_EXEC);
+  void *virt;   
 
-  // - the vectors
+  // the vectors
 
   // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in mm.c, which uses __hyp_create_private_mapping there to do some spectre-hardened mapping of `__bp_harden_hyp_vecs` (in `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion of "private mapping" is - and don't want to think about that right now.
   
-  // - the rest of the image
+  // the rest of the image
 
+  record_hyp_mapping_virt(HYP_TEXT, "hyp_symbol_addr(__hyp_text_start)",
+				hyp_symbol_addr(__hyp_text_start),
+				hyp_symbol_addr(__hyp_text_end),
+				PAGE_HYP_EXEC);
+  
+  record_hyp_mapping_virt(HYP_RODATA, "hyp_symbol_addr(__start_rodata)",
+				hyp_symbol_addr(__start_rodata),
+				hyp_symbol_addr(__end_rodata), PAGE_HYP_RO);
+  
+  record_hyp_mapping_virt(HYP_RODATA2, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
+				hyp_symbol_addr(__hyp_data_ro_after_init_start),
+				hyp_symbol_addr(__hyp_data_ro_after_init_end),
+				PAGE_HYP_RO);
+  
+  record_hyp_mapping_virt(HYP_BSS, "hyp_symbol_addr(__bss_start)",
+				hyp_symbol_addr(__bss_start),
+				hyp_symbol_addr(__hyp_bss_end), PAGE_HYP);
+  
+  record_hyp_mapping_virt(HYP_BSS2, "hyp_symbol_addr(__hyp_bss_end)",
+				hyp_symbol_addr(__hyp_bss_end),
+				hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
 
-
-  record_hyp_mapping_image_part(HYP_TEXT, "hyp_symbol_addr(__hyp_text_start)",
-			     hyp_symbol_addr(__hyp_text_start),
-			     hyp_symbol_addr(__hyp_text_end),
-			     PAGE_HYP_EXEC);
-  
-  record_hyp_mapping_image_part(HYP_RODATA, "hyp_symbol_addr(__start_rodata)",
-			     hyp_symbol_addr(__start_rodata),
-			     hyp_symbol_addr(__end_rodata), PAGE_HYP_RO);
-  
-  record_hyp_mapping_image_part(HYP_RODATA2, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
-			     hyp_symbol_addr(__hyp_data_ro_after_init_start),
-			     hyp_symbol_addr(__hyp_data_ro_after_init_end),
-			     PAGE_HYP_RO);
-  
-  record_hyp_mapping_image_part(HYP_BSS, "hyp_symbol_addr(__bss_start)",
-			     hyp_symbol_addr(__bss_start),
-			     hyp_symbol_addr(__hyp_bss_end), PAGE_HYP);
-  
-  record_hyp_mapping_image_part(HYP_BSS2, "hyp_symbol_addr(__hyp_bss_end)",
-			     hyp_symbol_addr(__hyp_bss_end),
-			     hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
+  // the idmap
 
   record_hyp_mapping_image_idmap(HYP_IDMAP, "hyp_symbol_addr(__hyp_idmap_text_start)",
-			      hyp_symbol_addr(__hyp_idmap_text_start),
-			      hyp_symbol_addr(__hyp_idmap_text_end), PAGE_HYP_EXEC);
+				 hyp_symbol_addr(__hyp_idmap_text_start),
+				 hyp_symbol_addr(__hyp_idmap_text_end), PAGE_HYP_EXEC);
 
-
-
-  
   // ...and we need to check the contents of all of those is what we
   // expect from the image file (modulo relocations and alternatives)
 
 
-
-
   // - the non-per-cpu workspace handed from Linux
-  //  record_hyp_mapping_workspace(HYP_WORKSPACE, "non-per-cpu workspace", virt, virt + size - 1, PAGE_HYP);
+
+  virt = hyp_phys_to_virt(phys);
+  record_hyp_mapping_virt(HYP_WORKSPACE, "non-per-cpu workspace",
+			       virt,
+			       virt + size - 1, PAGE_HYP);
+
+
   // AIUI this is all the working memory we've been handed.
   // divide_memory_pool chops it up into per-cpu stacks_base,
   // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
   // host_s2_dev_pgt_base; then the remainder (after the switch) is
   // handed to the buddy allocator (we might want to check those
-  // pieces separately, btw). So why is the percpu stuff separate??
+  // pieces separately, btw). 
     
 
   
-  
+  // why is the percpu stuff separate from the workspace?
+  // 
   // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
   //  bool check_hyp_mapping_percpu;
   //  {
@@ -714,13 +725,12 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_
 
   hyp_put_mappings();
 
-  ret = true;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
-    if (mappings[i].kind != HYP_NULL)
-      ret &= check_hyp_mapping(pgd,&mappings[i]);
-  }
+  ret = __check_hyp_mappings(pgd);
+
+
+
   
-    //    && check_hyp_mapping_percpu
+  //    && check_hyp_mapping_percpu
 
   // and we need disjointness of most of these.  Disjointness in a world with address translation is interesting... and there's also read-only-ness and execute permissions to be taken into account
 
@@ -738,9 +748,7 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, void *virt, uint64_t size, uint64_t nr_
 bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
   kvm_pte_t * pgd;
-  void *virt;
-   pgd = hyp_pgtable.pgd;
-  virt = hyp_phys_to_virt(phys);
-  return _check_hyp_mappings(pgd, virt, size, nr_cpus, per_cpu_base);
+  pgd = hyp_pgtable.pgd;
+  return _check_hyp_mappings(pgd, phys, size, nr_cpus, per_cpu_base);
 }
   
