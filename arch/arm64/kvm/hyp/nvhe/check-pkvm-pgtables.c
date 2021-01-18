@@ -42,14 +42,16 @@
 #include <../debug-pl011.h>
 
 
-// the per-cpu check needs 
-//   kern_hyp_va from arch/arm64/include/asm/kvm_mmu.h
-//   hyp_percpu_size  from arch/arm64/kvm/hyp/nvhe/setup.c
-// but when I try to #include <asm/kvm_mmu.h> for the former, I get build errors from files it includes
-// So I just comment out that check for now
+// copied from setup.c
+#define hyp_percpu_size ((unsigned long)__per_cpu_end - \
+			 (unsigned long)__per_cpu_start)
 
-// It may be that we need to remember some of these values in a more
-// convenient location anyhow.
+
+// horrible hack for max CPUs - later find out how to do this properly 
+#define MAX_CPUS 8
+
+
+
 
 
 
@@ -471,7 +473,6 @@ struct AddressDescriptor AArch64_FirstStageTranslate(uint64_t table_base, uint64
 /* ************************************************************************** */
 /* using the above to sketch an assertion for the state established by pKVM initialisation */
 
-
 enum mapping_kind {
   HYP_NULL,
   HYP_TEXT,
@@ -481,12 +482,16 @@ enum mapping_kind {
   HYP_BSS2,
   HYP_IDMAP,
   HYP_WORKSPACE,
-  HYP_MAPPING_KIND_NUMBER
+  HYP_PERCPU,
+  HYP_MAPPING_KIND_NUMBER=HYP_PERCPU + MAX_CPUS
 };
+
+#define DUMMY_CPU 0
 
 struct mapping {
   char *doc;                        // documentation string
   enum mapping_kind kind;           
+  u64 cpu;                          // cpu ID for HYP_PERCPU mappings; 0 otherwise
   u64 virt;                         // start pKVM EL2 after-the-switch virtual address, page-aligned
   phys_addr_t phys;                 // start physical address, page-aligned
   u64 size;                         // size, as the number of 4k pages
@@ -508,14 +513,22 @@ void hyp_put_prot(enum kvm_pgtable_prot prot)
 void hyp_put_mapping_kind(enum mapping_kind kind)
 {
   switch (kind) {
-    case HYP_TEXT:        hyp_putsp("HYP_TEXT     "); break;
-    case HYP_RODATA:	  hyp_putsp("HYP_RODATA   "); break;
-    case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2  "); break;
-    case HYP_BSS:	  hyp_putsp("HYP_BSS      "); break;
-    case HYP_BSS2:	  hyp_putsp("HYP_BSS2     "); break;
-    case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP    "); break;
-    case HYP_WORKSPACE:	  hyp_putsp("HYP_WORKSPACE"); break;
-    default: hyp_putsp("unknown mapping kind"); break;
+  case HYP_TEXT:          hyp_putsp("HYP_TEXT     "); break;
+  case HYP_RODATA:	  hyp_putsp("HYP_RODATA   "); break;
+  case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2  "); break;
+  case HYP_BSS:	          hyp_putsp("HYP_BSS      "); break;
+  case HYP_BSS2:	  hyp_putsp("HYP_BSS2     "); break;
+  case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP    "); break;
+  case HYP_WORKSPACE:	  hyp_putsp("HYP_WORKSPACE"); break;
+  default:
+    if (kind >= HYP_PERCPU && kind < HYP_PERCPU + MAX_CPUS)
+      {
+	hyp_putsp("HYP_PERCPU   "); break;
+      }
+    else
+      {
+	hyp_putsp("unknown mapping kind"); break;
+      }
   }
   hyp_putsp(" ");
 }
@@ -530,6 +543,7 @@ void hyp_put_mapping(struct mapping *map)
     hyp_putsxn("size",map->size,64);
     hyp_put_prot(map->prot);
     hyp_put_mapping_kind(map->kind);
+    if (map->kind >= HYP_PERCPU && map->kind < HYP_PERCPU + MAX_CPUS) hyp_putsxn("cpu",map->cpu,64);
     hyp_putsp(map->doc);
   }
 }
@@ -546,7 +560,7 @@ void hyp_put_mappings(void)
     
 
 // record a mapping for a range of hypervisor virtual addresses 
-void record_hyp_mapping_virt(enum mapping_kind kind, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+void record_hyp_mapping_virt(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
   u64 virt_from_aligned, virt_to_aligned;
   u64 size;
@@ -558,6 +572,7 @@ void record_hyp_mapping_virt(enum mapping_kind kind, char *doc, void *virt_from,
 
   mappings[kind].doc = doc;
   mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
   mappings[kind].virt = virt_from_aligned;
   mappings[kind].phys = phys;
   mappings[kind].size = size;
@@ -566,7 +581,7 @@ void record_hyp_mapping_virt(enum mapping_kind kind, char *doc, void *virt_from,
 
 
 // record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
-void record_hyp_mapping_image_idmap(enum mapping_kind kind, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+void record_hyp_mapping_image_idmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
   u64 virt_from_aligned, virt_to_aligned;
   u64 size;
@@ -578,6 +593,7 @@ void record_hyp_mapping_image_idmap(enum mapping_kind kind, char *doc, void *vir
 
   mappings[kind].doc = doc;
   mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
   mappings[kind].virt = phys; 
   mappings[kind].phys = phys;
   mappings[kind].size = size;
@@ -652,37 +668,44 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
   bool ret;
   void *virt;   
 
+  // horrible hack for number of CPUs
+  if (nr_cpus > MAX_CPUS) {
+    hyp_puts("_check_hyp_mappings nr_cpus > MAX_CPUS");
+    return false;
+  }
+  
+  
   // the vectors
 
   // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in mm.c, which uses __hyp_create_private_mapping there to do some spectre-hardened mapping of `__bp_harden_hyp_vecs` (in `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion of "private mapping" is - and don't want to think about that right now.
   
   // the rest of the image
 
-  record_hyp_mapping_virt(HYP_TEXT, "hyp_symbol_addr(__hyp_text_start)",
+  record_hyp_mapping_virt(HYP_TEXT, DUMMY_CPU, "hyp_symbol_addr(__hyp_text_start)",
 				hyp_symbol_addr(__hyp_text_start),
 				hyp_symbol_addr(__hyp_text_end),
 				PAGE_HYP_EXEC);
   
-  record_hyp_mapping_virt(HYP_RODATA, "hyp_symbol_addr(__start_rodata)",
+  record_hyp_mapping_virt(HYP_RODATA, DUMMY_CPU, "hyp_symbol_addr(__start_rodata)",
 				hyp_symbol_addr(__start_rodata),
 				hyp_symbol_addr(__end_rodata), PAGE_HYP_RO);
   
-  record_hyp_mapping_virt(HYP_RODATA2, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
+  record_hyp_mapping_virt(HYP_RODATA2, DUMMY_CPU, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
 				hyp_symbol_addr(__hyp_data_ro_after_init_start),
 				hyp_symbol_addr(__hyp_data_ro_after_init_end),
 				PAGE_HYP_RO);
   
-  record_hyp_mapping_virt(HYP_BSS, "hyp_symbol_addr(__bss_start)",
+  record_hyp_mapping_virt(HYP_BSS, DUMMY_CPU, "hyp_symbol_addr(__bss_start)",
 				hyp_symbol_addr(__bss_start),
 				hyp_symbol_addr(__hyp_bss_end), PAGE_HYP);
   
-  record_hyp_mapping_virt(HYP_BSS2, "hyp_symbol_addr(__hyp_bss_end)",
+  record_hyp_mapping_virt(HYP_BSS2, DUMMY_CPU, "hyp_symbol_addr(__hyp_bss_end)",
 				hyp_symbol_addr(__hyp_bss_end),
 				hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
 
   // the idmap
 
-  record_hyp_mapping_image_idmap(HYP_IDMAP, "hyp_symbol_addr(__hyp_idmap_text_start)",
+  record_hyp_mapping_image_idmap(HYP_IDMAP, DUMMY_CPU, "hyp_symbol_addr(__hyp_idmap_text_start)",
 				 hyp_symbol_addr(__hyp_idmap_text_start),
 				 hyp_symbol_addr(__hyp_idmap_text_end), PAGE_HYP_EXEC);
 
@@ -693,7 +716,7 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
   // - the non-per-cpu workspace handed from Linux
 
   virt = hyp_phys_to_virt(phys);
-  record_hyp_mapping_virt(HYP_WORKSPACE, "non-per-cpu workspace",
+  record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "non-per-cpu workspace",
 			       virt,
 			       virt + size - 1, PAGE_HYP);
 
@@ -710,18 +733,15 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
   // why is the percpu stuff separate from the workspace?
   // 
   // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
-  //  bool check_hyp_mapping_percpu;
-  //  {
-  //    bool acc=true;
-  //    int i;
-  //    void *start, *end;
-  //    for (i = 0; i < nr_cpus; i++) {
-  //      start = (void *)kern_hyp_va(per_cpu_base[i]);
-  //      end = start + PAGE_ALIGN(hyp_percpu_size);
-  //      acc = acc && check_hyp_mapping(pgd, start, end, PAGE_HYP);
-  //    }
-  //    check_hyp_mapping_percpu = acc;
-  //  }
+    {
+      int i;
+      void *start, *end;
+      for (i = 0; i < nr_cpus; i++) {
+        start = (void *)kern_hyp_va(per_cpu_base[i]);  // is per_cpu_base all the linux per-cpu variables, or what??
+        end = start + PAGE_ALIGN(hyp_percpu_size);     // with the hyp per-cpu variables at the start??
+        record_hyp_mapping_virt(HYP_PERCPU+i, i, "per-cpu variables", start, end, PAGE_HYP);
+      }
+  }
 
   hyp_put_mappings();
 
