@@ -32,6 +32,7 @@
 
 
 
+
 #include <asm/kvm_pgtable.h>
 //#include <asm/kvm_asm.h>
 //#include <nvhe/memory.h>
@@ -40,6 +41,14 @@
 
 #include <asm/kvm_mmu.h>
 #include <../debug-pl011.h>
+
+
+// linking to definitions in setup.c
+extern void *stacks_base;
+extern void *vmemmap_base;
+extern void *hyp_pgt_base;
+extern void *host_s2_mem_pgt_base;
+extern void *host_s2_dev_pgt_base;
 
 
 // copied from setup.c
@@ -602,6 +611,26 @@ void record_hyp_mapping_image_idmap(enum mapping_kind kind, u64 cpu, char *doc, 
 }
 
 
+// record a mapping for a range of hypervisor virtual addresses to a specific physical address, for the vmemmap
+void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, phys_addr_t phys, enum kvm_pgtable_prot prot)
+{
+  u64 virt_from_aligned, virt_to_aligned;
+  u64 size;
+  virt_from_aligned = (u64)virt_from & PAGE_MASK;
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+
+  mappings[kind].doc = doc;
+  mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
+  mappings[kind].virt = virt_from_aligned; 
+  mappings[kind].phys = phys;
+  mappings[kind].size = size;
+  mappings[kind].prot = prot;
+}
+
+
+
   
 
 
@@ -747,6 +776,7 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
       }
     ret = ret && entry;
   }
+  if (level == 0) { hyp_putsp("__check_hyp_mappings_rev "); hyp_putbool(ret); hyp_putc('\n'); }
   return ret;
 }
 
@@ -758,7 +788,7 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
 bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
 
-  bool ret;
+  bool ret, ret1, ret2;
   void *virt;   
 
   // horrible hack for number of CPUs
@@ -837,25 +867,27 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
       }
   }
 
-//    // the vmemmap
-//    // as established by hyp_back_vmemmap in mm.c
-//    {
-//      unsigned long vmemmap_start, vmemmap_end;
-//      phys_addr_t vmemmap_back;
-//
-//      vmemmap_back = hyp_virt_to_phys(vmemmap_base);
-//
-//      hyp_vmemmap_range(phys, size, &vmemmap_start, &vmemmap_end);
-//    
-//	
-//      record_hyp_mapping(HYP_VMEMMAP, DUMMY_CPU, vmemmap_start, (vmemmap_end - vmemmap_start) >> PAGE_SHIFT, vmemmap_back, PAGE_HYP);
-//    }
-//	//	return __hyp_create_mappings(vmemmap_start, vmemmap_end - vmemmap_start, vmemmap_back, PAGE_HYP);
+    // the vmemmap
+    // as established by hyp_back_vmemmap in mm.c
+    {
+      unsigned long vmemmap_start, vmemmap_end;
+      phys_addr_t vmemmap_back;
+
+      vmemmap_back = hyp_virt_to_phys(vmemmap_base);
+
+      hyp_vmemmap_range(phys, size, &vmemmap_start, &vmemmap_end);
+    
+	
+      record_hyp_mapping_vmemmap(HYP_VMEMMAP, DUMMY_CPU, "vmemmap", (void*)vmemmap_start, (void*)vmemmap_end, vmemmap_back, PAGE_HYP);
+    }
+	//	return __hyp_create_mappings(vmemmap_start, vmemmap_end - vmemmap_start, vmemmap_back, PAGE_HYP);
 
     
-  hyp_put_mappings();
+    //  hyp_put_mappings();
 
-  ret = __check_hyp_mappings(pgd) &&  __check_hyp_mappings_rev(pgd, 0, 0);
+  ret1 = __check_hyp_mappings(pgd);
+  ret2 = __check_hyp_mappings_rev(pgd, 0, 0);
+  ret = ret1 && ret1;
 
 
 

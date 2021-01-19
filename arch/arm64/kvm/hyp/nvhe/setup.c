@@ -48,7 +48,7 @@ static int create_hyp_debug_uart_mapping(void) { return 0; }
 #endif
 
 static void *stacks_base;
-static void *vmemmap_base;
+void *vmemmap_base;              // PS HACK REMOVE static TO MAKE VISIBLE IN check-pkvm-pgtables.c
 static void *hyp_pgt_base;
 static void *host_s2_mem_pgt_base;
 static void *host_s2_dev_pgt_base;
