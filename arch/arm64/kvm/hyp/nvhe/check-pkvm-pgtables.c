@@ -482,6 +482,7 @@ enum mapping_kind {
   HYP_BSS2,
   HYP_IDMAP,
   HYP_WORKSPACE,
+  HYP_VMEMMAP,
   HYP_PERCPU,
   HYP_MAPPING_KIND_NUMBER=HYP_PERCPU + MAX_CPUS
 };
@@ -508,8 +509,6 @@ void hyp_put_prot(enum kvm_pgtable_prot prot)
   if (prot & KVM_PGTABLE_PROT_X) hyp_putc('X'); else hyp_putc('-');
   hyp_putsp(" ");
 }
-100000000000000011110001100000000110000000000000
-               111111111111000000111000000000000
     
 void hyp_put_mapping_kind(enum mapping_kind kind)
 {
@@ -520,6 +519,7 @@ void hyp_put_mapping_kind(enum mapping_kind kind)
   case HYP_BSS:	          hyp_putsp("HYP_BSS      "); break;
   case HYP_BSS2:	  hyp_putsp("HYP_BSS2     "); break;
   case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP    "); break;
+  case HYP_VMEMMAP:	  hyp_putsp("HYP_VMEMMAP  "); break;
   case HYP_WORKSPACE:	  hyp_putsp("HYP_WORKSPACE"); break;
   default:
     if (kind >= HYP_PERCPU && kind < HYP_PERCPU + MAX_CPUS)
@@ -677,16 +677,14 @@ _Bool __check_hyp_mappings(kvm_pte_t *pgd)
 // that would be more algorithmically complex and involve more
 // allocation.
 
-// check (virt,phys) in at least one of the `mappings`
+// check (virt,phys) is in at least one of the `mappings`
 _Bool ___check_hyp_mappings_rev(u64 virt, phys_addr_t phys)
 {
   int i;
   for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
     if (mappings[i].kind != HYP_NULL)
       {
-	//TODO
-	if //(virt >= mappings[i].virt && virt < mappings[i].virt + PAGE_SIZE*mappings[i].size && phys == mappings[i].phys + (virt - mappings[i].virt)) {
-	  (phys >= mappings[i].phys && phys < mappings[i].phys + PAGE_SIZE*mappings[i].size) {
+	if (virt >= mappings[i].virt && virt < mappings[i].virt + PAGE_SIZE*mappings[i].size && phys == mappings[i].phys + (virt - mappings[i].virt)) {
 	  hyp_put_mapping_kind(mappings[i].kind);
 	  hyp_putc(' ');
 	  return true;
@@ -702,7 +700,7 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
 {
   bool ret, entry;
   u64 idx;
-  u64 va_new;
+  u64 va_partial_new;
   kvm_pte_t pte;
   enum entry_kind ek;
   u64 next_level_phys_address, next_level_virt_address;
@@ -710,13 +708,12 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
   ret = true;
   for (idx = 0; idx < 512; idx++) {
     switch (level) {
-    case 0: va_new = idx << 39; break;
-    case 1: va_new = idx << 30; break;
-    case 2: va_new = idx << 21; break;
-    case 3: va_new = idx << 12; break;
+    case 0: va_partial_new = va_partial | (idx << 39); break;
+    case 1: va_partial_new = va_partial | (idx << 30); break;
+    case 2: va_partial_new = va_partial | (idx << 21); break;
+    case 3: va_partial_new = va_partial | (idx << 12); break;
     default: hyp_puts("unhandled level"); // this is just to tell the compiler that the cases are exhaustive
     }
-    va_partial |= va_new;
       
     pte = pgd[idx];
     
@@ -730,14 +727,14 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
 	next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
 	// hyp_putsxn("table phys", next_level_phys_address, 64);
 	//hyp_putsxn("table virt", next_level_virt_address, 64);
-	entry =__check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial); break;
+	entry =__check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial_new); break;
       case EK_PAGE_DESCRIPTOR:
 	{ u64 oa;
 	  oa = pte & GENMASK(47,12);
 	  //hyp_putsxn("oa", oa, 64);
 	  // now check (va_partial, oa) is in one of the mappings  (ignore prot for now, but should check)
-	  hyp_putsp("__check_hyp_mappings_rev "); hyp_putsxn("va", va_partial, 64); hyp_putsxn("oa", oa, 64);
-	  entry = ___check_hyp_mappings_rev(va_partial, oa);
+	  hyp_putsp("__check_hyp_mappings_rev "); hyp_putsxn("va", va_partial_new, 64); hyp_putsxn("oa", oa, 64);
+	  entry = ___check_hyp_mappings_rev(va_partial_new, oa);
 	  hyp_putbool(entry);
 	  hyp_putc('\n');
 
@@ -826,6 +823,7 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
     
 
   
+  // the per-cpu variables.
   // why is the percpu stuff separate from the workspace?
   // 
   // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
@@ -839,6 +837,22 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
       }
   }
 
+//    // the vmemmap
+//    // as established by hyp_back_vmemmap in mm.c
+//    {
+//      unsigned long vmemmap_start, vmemmap_end;
+//      phys_addr_t vmemmap_back;
+//
+//      vmemmap_back = hyp_virt_to_phys(vmemmap_base);
+//
+//      hyp_vmemmap_range(phys, size, &vmemmap_start, &vmemmap_end);
+//    
+//	
+//      record_hyp_mapping(HYP_VMEMMAP, DUMMY_CPU, vmemmap_start, (vmemmap_end - vmemmap_start) >> PAGE_SHIFT, vmemmap_back, PAGE_HYP);
+//    }
+//	//	return __hyp_create_mappings(vmemmap_start, vmemmap_end - vmemmap_start, vmemmap_back, PAGE_HYP);
+
+    
   hyp_put_mappings();
 
   ret = __check_hyp_mappings(pgd) &&  __check_hyp_mappings_rev(pgd, 0, 0);
