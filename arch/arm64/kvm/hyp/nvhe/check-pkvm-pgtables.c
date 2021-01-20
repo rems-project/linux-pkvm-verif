@@ -1,9 +1,10 @@
 
 // PS HACK
 
-// toying with using a native EL2 address translation C executable
-// "spec" to express a property of the state established by the pKVM
-// initialisation, in a style that could easily be used by the pKVM devs.
+// experiment with C executable version of the main EL2 page-table
+// spec established by pKVM initialisation, using C versions of the
+// EL2 address translation definition, in a style that could easily be
+// used by the pKVM devs.
 
 // We might be able to check that something like this "semantics" of
 // address translation is equivalent to the Armv8-A ASL definition
@@ -28,7 +29,8 @@
 // necessarily after.
 // 
 // Note that it reads pagetable contents just using the current
-// mapping, whatever that is. 
+// mapping, whatever that is - one needs assumptions about that to
+// make this assertion check meaningful.
 
 
 
@@ -50,6 +52,12 @@ extern void *hyp_pgt_base;
 extern void *host_s2_mem_pgt_base;
 extern void *host_s2_dev_pgt_base;
 
+extern unsigned long stacks_size;
+extern unsigned long vmemmap_size;              
+extern unsigned long hyp_pgt_size;
+extern unsigned long host_s2_mem_pgt_size;
+extern unsigned long host_s2_dev_pgt_size;
+
 
 // copied from setup.c
 #define hyp_percpu_size ((unsigned long)__per_cpu_end - \
@@ -64,19 +72,20 @@ extern void *host_s2_dev_pgt_base;
 
 
 
-/* ************************************************************************** */
-/* 
- * experiment in style: pretty-print of Armv8-A page tables that can run in the EL2 code
+
+/* ************************************************************************** 
+ * additional debug printing functions, extending debug-pl011.h (some "plain",
+ *  without the trailing \n) 
  */
 
-// "plain" versions of some debug-pl011.h functions, without the trailing \n
+
 void hyp_putsp(char *s)
 {
   while (*s)
     hyp_putc(*s++);
 }
 
-void hyp_putbool(_Bool b)
+void hyp_putbool(bool b)
 {
   if (b) hyp_putsp("true"); else hyp_putsp("false");
 }
@@ -94,9 +103,6 @@ static inline void __hyp_putx4np(unsigned long x, int n)
 
 }
 
-
-
-
 void hyp_putsxn(char *s, unsigned long x, int n)
 {
   hyp_putsp(s);
@@ -106,6 +112,10 @@ void hyp_putsxn(char *s, unsigned long x, int n)
 }
 
 
+
+/* ************************************************************************** 
+ * Armv8-A page-table entries
+ */
 
 // the logical entry kinds
 enum entry_kind {
@@ -126,7 +136,6 @@ enum entry_kind {
 #define ENTRY_PAGE_DESCRIPTOR 3
 #define ENTRY_TABLE 3
 
-// 
 enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
 {
   switch(level)
@@ -172,7 +181,6 @@ enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
     }
 }
 
-
 void hyp_put_ek(enum entry_kind ek)
 {
   switch(ek)
@@ -212,8 +220,11 @@ void hyp_put_entry(kvm_pte_t pte, u8 level)
 
 
 
-// dump page starting at pgd, and any sub-pages
-void _dump_hyp_mappings(u64 *pgd, u8 level)
+/* ************************************************************************** 
+ * very crude dump of Armv8-A page tables, starting at pgd, with any sub-tables
+ */
+
+void _dump_pgtable(u64 *pgd, u8 level)
 {
     u32 idx;
     if (pgd) {
@@ -237,7 +248,7 @@ void _dump_hyp_mappings(u64 *pgd, u8 level)
 	  next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
 	  hyp_putsxn("table phys", next_level_phys_address, 64);
 	  hyp_putsxn("table virt", next_level_virt_address, 64);
-	  _dump_hyp_mappings((kvm_pte_t *)next_level_virt_address, level+1);
+	  _dump_pgtable((kvm_pte_t *)next_level_virt_address, level+1);
 	  hyp_puts("");
 	}
       }
@@ -248,27 +259,24 @@ void _dump_hyp_mappings(u64 *pgd, u8 level)
 }
 
 
-void dump_hyp_mappings(struct kvm_pgtable pg)
+void dump_pgtable(struct kvm_pgtable pg)
 {
   hyp_putsxn("ia_bits", pg.ia_bits, 32);
   hyp_putsxn("ia_start_level", pg.start_level, 32);
   hyp_puts("");
-  _dump_hyp_mappings(pg.pgd, pg.start_level);
+  _dump_pgtable(pg.pgd, pg.start_level);
   
   return;
 }
 
 
 
-/* ************************************************************************** */
-/* 
- * experiment in style: sketching a C-executable "semantics" of
- * Armv8-A page tables, (very) loosely following the Arm ARM ASL
- * definition but missing out most of the details, in a pure-ish
- * style.
+/* ************************************************************************** 
+ * very crude C executable version of Armv8-A page-table walk definition, very 
+ * loosely following the Arm ARM ASL definition - really just the types at 
+ * present (modulo embedding bitvectors into uint64_t), 
+ * but omitting almost all details
  */
-
-// I've made the types follow the ASL, modulo embedding bitvectors into uint64_t
 
 enum Fault {
   Fault_None,
@@ -342,12 +350,6 @@ struct TLBRecord {
 
 
 // aarch64/translation/walk/AArch64.TranslationTableWalk
-// AArch64.TranslationTableWalk()
-// ==============================
-// Returns a result of a translation table walk
-// Implementations might cache information from memory in any number of non-coherent TLB
-// caching structures, and so avoid memory accesses that have been expressed in this
-// pseudocode. The use of such TLBs is not expressed in this pseudocode.
 // TLBRecord AArch64.TranslationTableWalk(bits(52) ipaddress, boolean s1_nonsecure, bits(64) vaddress, AccType acctype, boolean iswrite, boolean secondstage, boolean s2fs1walk, integer size)
 
 // There's a lot of detailed code here, but most relates to options
@@ -363,23 +365,19 @@ struct TLBRecord {
 struct TLBRecord mkFault(uint64_t vaddress) {
   struct TLBRecord r = { .addrdesc = { .fault = { .statuscode=Fault_Translation } , .paddress =  { .address=0, .NS=0 }, .vaddress = vaddress } };
   return r;
-  // oversimplified
+  // massively oversimplified
 }
-
 
 struct TLBRecord mkTranslation(uint64_t vaddress, uint64_t pa) {
   struct TLBRecord r = { .addrdesc = { .fault = { .statuscode=Fault_None } , .paddress =  { .address=pa, .NS=1 }, .vaddress = vaddress } };
   return r;
-  // oversimplified
+  // massively oversimplified
 }
-
-
-
 
 struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t level, uint64_t vaddress);
 
 struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t level, uint64_t vaddress) {
-  // in pure-ish C style, these should really be combined with their
+  // these declarations should really be combined with their
   // initialisations below, but the compiler complains that ISO C90
   // forbids mixed declations and code
   uint64_t pte;            
@@ -444,7 +442,6 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
     default: return mkFault(vaddress); // this is just to tell the compiler that the cases are exhaustive
     }
 }
-
       
 // struct TLBRecord AArch64_TranslationTableWalk(uint64_t vaddress) {
 //  uint64_t inputsize = 48;         // input address zie in bits
@@ -454,17 +451,11 @@ struct TLBRecord AArch64_TranslationTableWalk( uint64_t table_base, uint64_t lev
 //  uint64_t level = 0;  // 4 - (1+((inputsize - grainsize - 1) DIV stride)); //  4-(1+((48-12-1) DIV 9))  The starting level is the number of strides needed to consume the input address
 //  uint64_t outputsize = 48;        // PS guess
 
-  
-  
 // aarch64/translation/translation/AArch64.FirstStageTranslate
-// AArch64.FirstStageTranslate()
 // =============================
 // Perform a stage 1 translation walk. The function used by Address Translation operations is
 // similar except it uses the translation regime specified for the instruction.
 // AddressDescriptor AArch64.FirstStageTranslate(bits(64) vaddress, AccType acctype, boolean iswrite, boolean wasaligned, integer size)
-
-
-
   
 struct AddressDescriptor AArch64_FirstStageTranslate(uint64_t table_base, uint64_t vaddress /*, AccType acctype, boolean iswrite, boolean wasaligned, integer size*/) {
 
@@ -479,8 +470,9 @@ struct AddressDescriptor AArch64_FirstStageTranslate(uint64_t table_base, uint64
 
 
 
-/* ************************************************************************** */
-/* using the above to sketch an assertion for the state established by pKVM initialisation */
+/* ************************************************************************** 
+ * abstraction of pKVM mappings
+ */
 
 enum mapping_kind {
   HYP_NULL,
@@ -490,8 +482,14 @@ enum mapping_kind {
   HYP_BSS,
   HYP_BSS2,
   HYP_IDMAP,
-  HYP_WORKSPACE,
+  HYP_STACKS,
   HYP_VMEMMAP,
+  HYP_S1_PGTABLE,
+  HYP_S2_MEM_PGTABLE,
+  HYP_S2_DEV_PGTABLE,
+  HYP_ALL_WORKSPACE,
+  HYP_VMEMMAP_MAP,
+  HYP_UART,
   HYP_PERCPU,
   HYP_MAPPING_KIND_NUMBER=HYP_PERCPU + MAX_CPUS
 };
@@ -500,9 +498,9 @@ enum mapping_kind {
 
 struct mapping {
   char *doc;                        // documentation string
-  enum mapping_kind kind;           
+  enum mapping_kind kind;           // the kind of this mapping     
   u64 cpu;                          // cpu ID for HYP_PERCPU mappings; 0 otherwise
-  u64 virt;                         // start pKVM EL2 after-the-switch virtual address, page-aligned
+  u64 virt;                         // pKVM EL2 after-the-switch start virtual address, page-aligned
   phys_addr_t phys;                 // start physical address, page-aligned
   u64 size;                         // size, as the number of 4k pages
   enum kvm_pgtable_prot prot;       // protection
@@ -522,14 +520,20 @@ void hyp_put_prot(enum kvm_pgtable_prot prot)
 void hyp_put_mapping_kind(enum mapping_kind kind)
 {
   switch (kind) {
-  case HYP_TEXT:          hyp_putsp("HYP_TEXT     "); break;
-  case HYP_RODATA:	  hyp_putsp("HYP_RODATA   "); break;
-  case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2  "); break;
-  case HYP_BSS:	          hyp_putsp("HYP_BSS      "); break;
-  case HYP_BSS2:	  hyp_putsp("HYP_BSS2     "); break;
-  case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP    "); break;
-  case HYP_VMEMMAP:	  hyp_putsp("HYP_VMEMMAP  "); break;
-  case HYP_WORKSPACE:	  hyp_putsp("HYP_WORKSPACE"); break;
+  case HYP_TEXT:          hyp_putsp("HYP_TEXT          "); break;
+  case HYP_RODATA:	  hyp_putsp("HYP_RODATA        "); break;
+  case HYP_RODATA2:	  hyp_putsp("HYP_RODATA2       "); break;
+  case HYP_BSS:	          hyp_putsp("HYP_BSS           "); break;
+  case HYP_BSS2:	  hyp_putsp("HYP_BSS2          "); break;
+  case HYP_IDMAP:	  hyp_putsp("HYP_IDMAP         "); break;
+  case HYP_STACKS:	  hyp_putsp("HYP_STACKS        "); break;
+  case HYP_VMEMMAP:	  hyp_putsp("HYP_VMEMMAP       "); break;
+  case HYP_S1_PGTABLE:	  hyp_putsp("HYP_S1_PGTABLE    "); break;
+  case HYP_S2_MEM_PGTABLE:hyp_putsp("HYP_S2_MEM_PGTABLE"); break;
+  case HYP_S2_DEV_PGTABLE:hyp_putsp("HYP_S2_DEV_PGTABLE"); break;
+  case HYP_VMEMMAP_MAP:	  hyp_putsp("HYP_VMEMMAP_MAP   "); break;
+  case HYP_UART:	  hyp_putsp("HYP_UART          "); break;
+  case HYP_ALL_WORKSPACE: hyp_putsp("HYP_ALL_WORKSPACE "); break;
   default:
     if (kind >= HYP_PERCPU && kind < HYP_PERCPU + MAX_CPUS)
       {
@@ -569,82 +573,15 @@ void hyp_put_mappings(void)
   
     
 
-// record a mapping for a range of hypervisor virtual addresses 
-void record_hyp_mapping_virt(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
-{
-  u64 virt_from_aligned, virt_to_aligned;
-  u64 size;
-  phys_addr_t phys;
-  virt_from_aligned = (u64)virt_from & PAGE_MASK;
-  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
-  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
-  phys = hyp_virt_to_phys((void*)virt_from_aligned);
-
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = virt_from_aligned;
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
-}
-
-
-// record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
-void record_hyp_mapping_image_idmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
-{
-  u64 virt_from_aligned, virt_to_aligned;
-  u64 size;
-  phys_addr_t phys;
-  virt_from_aligned = (u64)virt_from & PAGE_MASK;
-  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
-  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
-  phys = hyp_virt_to_phys((void*)virt_from_aligned);
-
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = phys; 
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
-}
-
-
-// record a mapping for a range of hypervisor virtual addresses to a specific physical address, for the vmemmap
-void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, phys_addr_t phys, enum kvm_pgtable_prot prot)
-{
-  u64 virt_from_aligned, virt_to_aligned;
-  u64 size;
-  virt_from_aligned = (u64)virt_from & PAGE_MASK;
-  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
-  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
-
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = virt_from_aligned; 
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
-}
-
-
-
   
 
 
-/** from kvm_pgtable.h, pgt has (among other members which aren't relevant here):
- * @ia_bits:		Maximum input address size, in bits.
- * @start_level:	Level at which the page-table walk starts.
- * @pgd:		Pointer to the first top-level entry of the page-table.
- *
- * where pgd is a kvm_pte_t *, and kvm_pte_t is just u64
+/* ************************************************************************** 
+ * check that a specific virt |-> (phys,prot) is included in the pagetables at pgd, 
+ * using the Armv8-A page-table walk function 
+ * TODO: ignoring prot for now
  */
-
-
-// check a specific virt |-> (phys,prot) is included in the pagetables at pgd
-_Bool _check_hyp_mapping(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
+bool _check_hyp_mapping_fwd(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
 
   struct AddressDescriptor ad = AArch64_FirstStageTranslate((uint64_t)pgd, virt);
@@ -658,16 +595,18 @@ _Bool _check_hyp_mapping(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pg
     }
 }
 
-// check the `mapping` range of pages are included in the pagetables at `pgd`
-_Bool check_hyp_mapping(kvm_pte_t *pgd, struct mapping *mapping)
+/* ************************************************************************** 
+ * check the `mapping` range of pages are included in the pagetables at `pgd`
+ */
+bool check_hyp_mapping_fwd(kvm_pte_t *pgd, struct mapping *mapping)
 {
   u64 i;
   bool ret;
   
-  hyp_putsp("check_hyp_mapping "); 
+  hyp_putsp("check_hyp_mapping_fwd "); 
   ret = true;
   for (i=0; i<mapping->size; i++) 
-    ret &= _check_hyp_mapping(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
+    ret &= _check_hyp_mapping_fwd(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
   hyp_putbool(ret);
   hyp_putc(' ');
   hyp_put_mapping(mapping);
@@ -675,57 +614,68 @@ _Bool check_hyp_mapping(kvm_pte_t *pgd, struct mapping *mapping)
   return ret;
 }
 
-
-// check all the mappings recorded in `mappings` are included in the pagetables at `pgd`
-_Bool __check_hyp_mappings(kvm_pte_t *pgd)
+/* ************************************************************************** 
+ * check that all the mappings recorded in `mappings` are included in the pagetables at `pgd`
+ */
+bool check_hyp_mappings_fwd(kvm_pte_t *pgd)
 {
   bool ret;
   u64 i;
   ret = true;
   for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
     if (mappings[i].kind != HYP_NULL)
-      ret &= check_hyp_mapping(pgd,&mappings[i]);
+      ret &= check_hyp_mapping_fwd(pgd,&mappings[i]);
   }
   return ret;
 }
 
 
-// check all the mappings in the pagetables at `pgd` are included in those recorded in `mappings`
+/* ************************************************************************** 
+ * check all the mappings in the pagetables at `pgd` are included in those recorded in `mappings`
+ */
 
-// mathematically one would do this with a single quantification over
+// Mathematically one would do this with a single quantification over
 // all virtual addresses, using the Arm ASL translate function for
 // each, but that would take too long to execute.  So we have to
 // duplicate some of the walk code.  We could reuse pgtable.c here -
 // but we want an independent definition that eventually we can prove
 // relates to the Arm ASL.  For now, I'll just hack something up,
-// adapting my earlier hacked-up version of the walk code.
+// adapting the above hacked-up version of the walk code.
 
 // At a higher level, instead of doing two inclusion checks, we could
 // compute a more explicit representation of the denotation of a page
-// table and of the collection of mappings and check equality, but
-// that would be more algorithmically complex and involve more
-// allocation.
+// table and of the collection of mappings and check equality. That
+// would be mathematically cleaner but more algorithmically complex,
+// and involve more allocation.
 
 // check (virt,phys) is in at least one of the `mappings`
-_Bool ___check_hyp_mappings_rev(u64 virt, phys_addr_t phys)
+bool _check_hyp_mappings_rev(u64 virt, phys_addr_t phys, bool noisy)
 {
   int i;
+  u64 count;
+  count=0;
   for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
     if (mappings[i].kind != HYP_NULL)
       {
 	if (virt >= mappings[i].virt && virt < mappings[i].virt + PAGE_SIZE*mappings[i].size && phys == mappings[i].phys + (virt - mappings[i].virt)) {
-	  hyp_put_mapping_kind(mappings[i].kind);
-	  hyp_putc(' ');
-	  return true;
+	  count++;
+	  if (noisy) {
+	    hyp_put_mapping_kind(mappings[i].kind);
+	    hyp_putc(' ');
+	    if (count > 1) hyp_putsp("duplicate ");
+	  }
 	}
       }
   }
-  hyp_putsp("not found ");
-  return false;
+  if (noisy)
+    if (count == 0) hyp_putsp("not found ");
+  return (count >= 1);
 }
 
-_Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial);
-_Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial) 
+// very crude recurse over the Armv8-A page tables at `pgd`, checking that each leaf
+// (virt,phys) is in at least one of the mappings
+bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy);
+bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy) 
 {
   bool ret, entry;
   u64 idx;
@@ -756,16 +706,15 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
 	next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
 	// hyp_putsxn("table phys", next_level_phys_address, 64);
 	//hyp_putsxn("table virt", next_level_virt_address, 64);
-	entry =__check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial_new); break;
+	entry =check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial_new, noisy); break;
       case EK_PAGE_DESCRIPTOR:
 	{ u64 oa;
 	  oa = pte & GENMASK(47,12);
 	  //hyp_putsxn("oa", oa, 64);
 	  // now check (va_partial, oa) is in one of the mappings  (ignore prot for now, but should check)
-	  hyp_putsp("__check_hyp_mappings_rev "); hyp_putsxn("va", va_partial_new, 64); hyp_putsxn("oa", oa, 64);
-	  entry = ___check_hyp_mappings_rev(va_partial_new, oa);
-	  hyp_putbool(entry);
-	  hyp_putc('\n');
+	  if (noisy) { hyp_putsp("check_hyp_mappings_rev "); hyp_putsxn("va", va_partial_new, 64); hyp_putsxn("oa", oa, 64); }
+	  entry = _check_hyp_mappings_rev(va_partial_new, oa, noisy);
+	  if (noisy) { hyp_putbool(entry); hyp_putc('\n'); }
 
 	}
 	break;	 
@@ -776,7 +725,7 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
       }
     ret = ret && entry;
   }
-  if (level == 0) { hyp_putsp("__check_hyp_mappings_rev "); hyp_putbool(ret); hyp_putc('\n'); }
+  if (level == 0) { hyp_putsp("check_hyp_mappings_rev "); hyp_putbool(ret); hyp_putc('\n'); }
   return ret;
 }
 
@@ -784,23 +733,175 @@ _Bool __check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial)
 
 
 
-// record and check all the pKVM mappings  
-bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+
+
+  
+
+
+
+
+/* ************************************************************************** 
+ * check forward and reverse inclusions of the mappings in the pagetables at `pgd` and those recorded in `mappings`
+ */
+
+// call with hyp_pgtable.pgd to check putative mappings as described
+// in hyp_pgtable, before the switch.  After the switch, we can do the
+// same but using the then-current TTBR0_EL2 value instead of the
+// hyp_pgtable.pgd
+
+
+bool check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+{
+  bool ret, fwd, rev;
+  fwd = check_hyp_mappings_fwd(pgd);
+  rev = check_hyp_mappings_rev(pgd, 0, 0, noisy);
+
+  // and we need to check disjointness of most of them. Disjointness
+  // in a world with address translation is interesting... and there's
+  // also read-only-ness and execute permissions to be taken into
+  // account
+
+  ret = fwd && rev;
+  hyp_putsp("check_hyp_mappings: "); hyp_putbool(ret); hyp_putc('\n');
+  return ret;
+}
+
+
+
+
+
+
+
+
+
+
+/* ************************************************************************** 
+ * record a mapping for a range of hypervisor virtual addresses 
+ */
+
+void record_hyp_mapping_virt(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+{
+  u64 virt_from_aligned, virt_to_aligned;
+  u64 size;
+  phys_addr_t phys;
+  virt_from_aligned = (u64)virt_from & PAGE_MASK;
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+  phys = hyp_virt_to_phys((void*)virt_from_aligned);
+
+  mappings[kind].doc = doc;
+  mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
+  mappings[kind].virt = virt_from_aligned;
+  mappings[kind].phys = phys;
+  mappings[kind].size = size;
+  mappings[kind].prot = prot;
+}
+
+/* ************************************************************************** 
+ * record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
+ */
+void record_hyp_mapping_image_idmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+{
+  u64 virt_from_aligned, virt_to_aligned;
+  u64 size;
+  phys_addr_t phys;
+  virt_from_aligned = (u64)virt_from & PAGE_MASK;
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+  phys = hyp_virt_to_phys((void*)virt_from_aligned);
+
+  mappings[kind].doc = doc;
+  mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
+  mappings[kind].virt = phys; 
+  mappings[kind].phys = phys;
+  mappings[kind].size = size;
+  mappings[kind].prot = prot;
+}
+
+
+/* ************************************************************************** 
+ * record a mapping for a range of hypervisor virtual addresses to a specific physical address, for the vmemmap
+ */
+void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, phys_addr_t phys, enum kvm_pgtable_prot prot)
+{
+  u64 virt_from_aligned, virt_to_aligned;
+  u64 size;
+  virt_from_aligned = (u64)virt_from & PAGE_MASK;
+  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+
+  mappings[kind].doc = doc;
+  mappings[kind].kind = kind;
+  mappings[kind].cpu = cpu;
+  mappings[kind].virt = virt_from_aligned; 
+  mappings[kind].phys = phys;
+  mappings[kind].size = size;
+  mappings[kind].prot = prot;
+}
+
+
+///* ************************************************************************** 
+// * record a mapping for the uart  IN PROGRESS
+// */
+//void record_hyp_mapping_uart(void);
+//{
+//  phys_addr_t phys = CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR;
+//  enum kvm_pgtable_prot prot = PAGE_HYP_DEVICE;
+//  u64 size = 1;
+//  void *virt = __io_map_base;
+//  
+//  u64 virt_from_aligned, virt_to_aligned;
+//  u64 size;
+//  virt_from_aligned = (u64)virt_from & PAGE_MASK;
+//  virt_to_aligned = PAGE_ALIGN((u64)virt_to);
+//  size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
+//
+//  mappings[kind].doc = doc;
+//  mappings[kind].kind = kind;
+//  mappings[kind].cpu = cpu;
+//  mappings[kind].virt = virt_from_aligned; 
+//  mappings[kind].phys = phys;
+//  mappings[kind].size = size;
+//  mappings[kind].prot = prot;
+//}
+
+
+
+
+
+/* ************************************************************************** 
+ * record the pKVM mappings  
+ *
+ * As written this duplicates some of the setup.c code that constructs
+ * the actual mappings. That duplication is somewhat useful for us to
+ * check we understand, but it would be cleaner to integrate the
+ * recording into the construction code - though that would also be
+ * more invasive w.r.t. the non-verification code, so this might be
+ * preferable in practice for now in any case.
+ */
+void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
 
-  bool ret, ret1, ret2;
   void *virt;   
 
   // horrible hack for number of CPUs
   if (nr_cpus > MAX_CPUS) {
-    hyp_puts("_check_hyp_mappings nr_cpus > MAX_CPUS");
-    return false;
+    hyp_puts("record_hyp_mappings nr_cpus > MAX_CPUS");
+    return;
   }
   
   
   // the vectors
-
-  // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in mm.c, which uses __hyp_create_private_mapping there to do some spectre-hardened mapping of `__bp_harden_hyp_vecs` (in `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion of "private mapping" is - and don't want to think about that right now.
+  // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in
+  // mm.c, which uses __hyp_create_private_mapping there to do some
+  // spectre-hardened mapping of `__bp_harden_hyp_vecs` (in
+  // `arch/arm64/kvm/hyp/hyp-entry.S`(?)). Not sure what this notion
+  // of "private mapping" is - and don't want to think about that
+  // right now.  It doesn't seem to actually be used in the QEMU
+  // execution - perhaps Cortex-A72 doesn't have the required
+  // cpus_have_const_cap(ARM64_SPECTRE_V3A)
   
   // the rest of the image
 
@@ -836,27 +937,34 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
   // expect from the image file (modulo relocations and alternatives)
 
 
-  // - the non-per-cpu workspace handed from Linux
-
-  virt = hyp_phys_to_virt(phys);
-  record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "non-per-cpu workspace",
-			       virt,
-			       virt + size - 1, PAGE_HYP);
-
-
+  // the non-per-cpu workspace handed from Linux
   // AIUI this is all the working memory we've been handed.
   // divide_memory_pool chops it up into per-cpu stacks_base,
   // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
   // host_s2_dev_pgt_base; then the remainder (after the switch) is
-  // handed to the buddy allocator (we might want to check those
-  // pieces separately, btw). 
-    
-
+  // handed to the buddy allocator. We want to check those
+  // pieces separately, so split this up, but for now also record the
+  // workspace as a whole.
   
+  //  the whole workspace:
+  virt = hyp_phys_to_virt(phys);
+  record_hyp_mapping_virt(HYP_ALL_WORKSPACE, DUMMY_CPU, "all non-per-cpu workspace",
+  			       virt,
+  			       virt + size - 1, PAGE_HYP);
+
+  // the individual pieces:
+  record_hyp_mapping_virt(HYP_STACKS, DUMMY_CPU, "hyp stacks", stacks_base, stacks_base + PAGE_SIZE*stacks_size, PAGE_HYP);
+  record_hyp_mapping_virt(HYP_VMEMMAP, DUMMY_CPU, "vmemmap", vmemmap_base, vmemmap_base + PAGE_SIZE*vmemmap_size, PAGE_HYP);
+  record_hyp_mapping_virt(HYP_S1_PGTABLE, DUMMY_CPU, "s1 pgtable", hyp_pgt_base, hyp_pgt_base + PAGE_SIZE*hyp_pgt_size, PAGE_HYP);
+  record_hyp_mapping_virt(HYP_S2_MEM_PGTABLE, DUMMY_CPU, "s2 mem pgtable", host_s2_mem_pgt_base, host_s2_mem_pgt_base + PAGE_SIZE*host_s2_mem_pgt_size, PAGE_HYP);
+  record_hyp_mapping_virt(HYP_S2_DEV_PGTABLE, DUMMY_CPU, "s2 dev pgtable", host_s2_dev_pgt_base, host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, PAGE_HYP);
+
+  // I don't understand how the __kvm_hyp_protect_finalise installation of the buddy allocator relates to the host_s2 parts of the divide_memory_pool
+  // record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace", host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, (void*)hyp_phys_to_virt(phys) + size - 1 - host_s2_dev_pgt_base - PAGE_SIZE*host_s2_dev_pgt_size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
+
+
   // the per-cpu variables.
-  // why is the percpu stuff separate from the workspace?
-  // 
-  // TODO: fix this per-cpu stuff, which currently hits the build problem with #include files mentioned above
+  // why is the percpu stuff separate from the workspace?  Because these are shared with other kernel code, pre-switch?
     {
       int i;
       void *start, *end;
@@ -865,52 +973,39 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, phys_addr_t phys, uint64_t size, uint64
         end = start + PAGE_ALIGN(hyp_percpu_size);     // with the hyp per-cpu variables at the start??
         record_hyp_mapping_virt(HYP_PERCPU+i, i, "per-cpu variables", start, end, PAGE_HYP);
       }
-  }
-
+    }
+    
     // the vmemmap
     // as established by hyp_back_vmemmap in mm.c
     {
       unsigned long vmemmap_start, vmemmap_end;
       phys_addr_t vmemmap_back;
-
+      
       vmemmap_back = hyp_virt_to_phys(vmemmap_base);
-
       hyp_vmemmap_range(phys, size, &vmemmap_start, &vmemmap_end);
-    
-	
-      record_hyp_mapping_vmemmap(HYP_VMEMMAP, DUMMY_CPU, "vmemmap", (void*)vmemmap_start, (void*)vmemmap_end, vmemmap_back, PAGE_HYP);
+      record_hyp_mapping_vmemmap(HYP_VMEMMAP_MAP, DUMMY_CPU, "vmemmap", (void*)vmemmap_start, (void*)vmemmap_end, vmemmap_back, PAGE_HYP);
     }
-	//	return __hyp_create_mappings(vmemmap_start, vmemmap_end - vmemmap_start, vmemmap_back, PAGE_HYP);
 
     
-    //  hyp_put_mappings();
-
-  ret1 = __check_hyp_mappings(pgd);
-  ret2 = __check_hyp_mappings_rev(pgd, 0, 0);
-  ret = ret1 && ret1;
-
-
+  hyp_put_mappings();
 
   
-  //    && check_hyp_mapping_percpu
-
-  // and we need disjointness of most of these.  Disjointness in a world with address translation is interesting... and there's also read-only-ness and execute permissions to be taken into account
-
-  hyp_putbool(ret); hyp_putc('\n');
-
-  
-  return ret;
 }
 
 
-// check putative mappings as described in hyp_pgtable, before the
-// switch.  After the switch, we can do the same but using the
-// then-current TTBR0_EL2 value instead of the hyp_pgtable.pgd
 
-bool check_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+
+/*
+ */
+
+void dump_kvm_nvhe_init_params(struct kvm_nvhe_init_params *params)
 {
-  kvm_pte_t * pgd;
-  pgd = hyp_pgtable.pgd;
-  return _check_hyp_mappings(pgd, phys, size, nr_cpus, per_cpu_base);
+        hyp_putsxn("mair_el2    ", params->mair_el2     , 64); hyp_putc('\n');
+        hyp_putsxn("tcr_el2     ", params->tcr_el2      , 64); hyp_putc('\n');
+        hyp_putsxn("tpidr_el2   ", params->tpidr_el2    , 64); hyp_putc('\n');
+        hyp_putsxn("stack_hyp_va", params->stack_hyp_va , 64); hyp_putc('\n');
+        hyp_putsxn("pgd_pa      ", (unsigned long)params->pgd_pa       , 64); hyp_putc('\n');
+        hyp_putsxn("hcr_el2     ", params->hcr_el2      , 64); hyp_putc('\n');
+        hyp_putsxn("vttbr       ", params->vttbr        , 64); hyp_putc('\n');
+        hyp_putsxn("vtcr        ", params->vtcr         , 64); hyp_putc('\n');
 }
-  

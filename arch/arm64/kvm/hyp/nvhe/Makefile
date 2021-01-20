@@ -12,8 +12,10 @@ lib-objs := $(addprefix ../../../lib/, $(lib-objs))
 obj-y := timer-sr.o sysreg-sr.o debug-sr.o switch.o tlb.o hyp-init.o host.o \
 	 hyp-main.o hyp-smp.o psci-relay.o early_alloc.o stub.o page_alloc.o \
 	 cache.o cpufeature.o setup.o mm.o mem_protect.o
-// PS HACK:
+# PS HACK:
 obj-y += check-pkvm-pgtables.o
+obj-y += check-pkvm-asm.o
+#
 obj-y += ../vgic-v3-sr.o ../aarch32.o ../vgic-v2-cpuif-proxy.o ../entry.o \
 	 ../fpsimd.o ../hyp-entry.o ../exception.o ../pgtable.o
 obj-y += $(lib-objs)
