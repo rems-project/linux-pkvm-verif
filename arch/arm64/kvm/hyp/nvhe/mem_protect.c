@@ -74,7 +74,7 @@ static void prepare_host_vtcr(void)
 	phys_shift = id_aa64mmfr0_parange_to_phys_shift(parange);
 
 	host_kvm.arch.vtcr = kvm_get_vtcr(mmfr0, mmfr1, phys_shift);
-}
+ }
 
 int kvm_host_prepare_stage2(void *mem_pgt_pool, void *dev_pgt_pool)
 {

@@ -15,6 +15,7 @@ obj-y := timer-sr.o sysreg-sr.o debug-sr.o switch.o tlb.o hyp-init.o host.o \
 # PS HACK:
 obj-y += check-pkvm-pgtables.o
 obj-y += check-pkvm-asm.o
+obj-y += sort_hack.o
 #
 obj-y += ../vgic-v3-sr.o ../aarch32.o ../vgic-v2-cpuif-proxy.o ../entry.o \
 	 ../fpsimd.o ../hyp-entry.o ../exception.o ../pgtable.o

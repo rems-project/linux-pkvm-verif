@@ -32,9 +32,27 @@
 // mapping, whatever that is - one needs assumptions about that to
 // make this assertion check meaningful.
 
+/*
+virt:0x00008000f1806000 phys:0x0000000131806000 size:0x0000000000000011 -R-X HYP_TEXT           hyp_symbol_addr(__hyp_text_start)
+virt:0x00008000f1820000 phys:0x0000000131820000 size:0x0000000000000769 -R-- HYP_RODATA         hyp_symbol_addr(__start_rodata)
+virt:0x00008000f280a000 phys:0x000000013280a000 size:0x0000000000000001 -R-- HYP_RODATA2        hyp_symbol_addr(__hyp_data_ro_after_init_start)
+virt:0x00008000f280b000 phys:0x000000013280b000 size:0x0000000000000003 -RW- HYP_BSS            hyp_symbol_addr(__bss_start)
+virt:0x00008000f280e000 phys:0x000000013280e000 size:0x0000000000000082 -R-- HYP_BSS2           hyp_symbol_addr(__hyp_bss_end)
+virt:0x0000000131806000 phys:0x0000000131806000 size:0x0000000000000001 -R-X HYP_IDMAP          hyp_symbol_addr(__hyp_idmap_text_start)
+virt:0x00008000fe000000 phys:0x000000013e000000 size:0x0000000000000002 -RW- HYP_STACKS         hyp stacks
+virt:0x00008000fe002000 phys:0x000000013e002000 size:0x000000000000002d -RW- HYP_VMEMMAP        vmemmap
+virt:0x00008000fe02f000 phys:0x000000013e02f000 size:0x0000000000000a81 -RW- HYP_S1_PGTABLE     s1 pgtable
+virt:0x00008000feab0000 phys:0x000000013eab0000 size:0x000000000000088e -RW- HYP_S2_MEM_PGTABLE s2 mem pgtable
+virt:0x00008000ff33e000 phys:0x000000013f33e000 size:0x0000000000000203 -RW- HYP_S2_DEV_PGTABLE s2 dev pgtable
+virt:0x00008000fe000000 phys:0x000000013e000000 size:0x0000000000001643 -RW- HYP_ALL_WORKSPACE  all non-per-cpu workspace
+virt:0x00006000027c0000 phys:0x000000013e002000 size:0x000000000000002d -RW- HYP_VMEMMAP_MAP    vmemmap
+HYP_MAPPING_NULL
+virt:0x00008000c03b8000 phys:0x00000001003b8000 size:0x0000000000000001 -RW- HYP_PERCPU    cpu:0x0000000000000000 per-cpu variables
+virt:0x00008000c03b9000 phys:0x00000001003b9000 size:0x0000000000000001 -RW- HYP_PERCPU    cpu:0x0000000000000001 per-cpu variables
+*/
 
 
-
+  
 #include <asm/kvm_pgtable.h>
 //#include <asm/kvm_asm.h>
 //#include <nvhe/memory.h>
@@ -44,6 +62,8 @@
 #include <asm/kvm_mmu.h>
 #include <../debug-pl011.h>
 
+// copy of linux sort library to make be linked in to nvhe.  likely there is a much better way to do this...
+#include <nvhe/sort_hack.h>
 
 // linking to definitions in setup.c
 extern void *stacks_base;
@@ -217,6 +237,9 @@ void hyp_put_entry(kvm_pte_t pte, u8 level)
     }
 
 }
+
+
+
 
 
 
@@ -606,7 +629,7 @@ bool check_hyp_mapping_fwd(kvm_pte_t *pgd, struct mapping *mapping)
   hyp_putsp("check_hyp_mapping_fwd "); 
   ret = true;
   for (i=0; i<mapping->size; i++) 
-    ret &= _check_hyp_mapping_fwd(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
+    ret = ret && _check_hyp_mapping_fwd(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
   hyp_putbool(ret);
   hyp_putc(' ');
   hyp_put_mapping(mapping);
@@ -624,7 +647,7 @@ bool check_hyp_mappings_fwd(kvm_pte_t *pgd)
   ret = true;
   for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
     if (mappings[i].kind != HYP_NULL)
-      ret &= check_hyp_mapping_fwd(pgd,&mappings[i]);
+      ret = ret && check_hyp_mapping_fwd(pgd,&mappings[i]);
   }
   return ret;
 }
@@ -750,7 +773,7 @@ bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy
 // hyp_pgtable.pgd
 
 
-bool check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+bool _check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
 {
   bool ret, fwd, rev;
   fwd = check_hyp_mappings_fwd(pgd);
@@ -947,10 +970,10 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
   // workspace as a whole.
   
   //  the whole workspace:
-  virt = hyp_phys_to_virt(phys);
-  record_hyp_mapping_virt(HYP_ALL_WORKSPACE, DUMMY_CPU, "all non-per-cpu workspace",
-  			       virt,
-  			       virt + size - 1, PAGE_HYP);
+  //  virt = hyp_phys_to_virt(phys);
+  //  record_hyp_mapping_virt(HYP_ALL_WORKSPACE, DUMMY_CPU, "all non-per-cpu workspace",
+  //  			       virt,
+  //  virt + size - 1, PAGE_HYP);
 
   // the individual pieces:
   record_hyp_mapping_virt(HYP_STACKS, DUMMY_CPU, "hyp stacks", stacks_base, stacks_base + PAGE_SIZE*stacks_size, PAGE_HYP);
@@ -1008,4 +1031,186 @@ void dump_kvm_nvhe_init_params(struct kvm_nvhe_init_params *params)
         hyp_putsxn("hcr_el2     ", params->hcr_el2      , 64); hyp_putc('\n');
         hyp_putsxn("vttbr       ", params->vttbr        , 64); hyp_putc('\n');
         hyp_putsxn("vtcr        ", params->vtcr         , 64); hyp_putc('\n');
+}
+
+
+
+
+
+/* *********************************************************** */
+/* new abstraction */
+
+struct maplet {
+  u64 virt;                   // must be page-aligned      
+  phys_addr_t phys;           // must be page-aligned
+  enum kvm_pgtable_prot prot; // punting on this for now
+};
+
+#define MAX_MAPLETS 100000     // arbitrary hack - better to calculate how big this must be and get linux to give us enough memory for them up-front
+
+struct maplets {
+  struct maplet maplets[MAX_MAPLETS];  // must be sorted by virtual address
+  u64 count;
+};
+
+static struct maplets maplets_a, maplets_b, maplets_c;
+
+
+
+void check_assert_fail(char *s)
+{
+  hyp_putsp("check_assert_fail: ");
+  hyp_putsp(s);
+  hyp_putc('\n');
+}
+
+void extend_maplets(struct maplets *ms, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
+{
+  if (ms->count >= MAX_MAPLETS) check_assert_fail("extend maplets full");
+  if (ms->count > 0 && virt <= ms->maplets[ms->count - 1].virt) { check_assert_fail("extend maplets given non-increasing virt"); hyp_putsxn("ms->count",ms->count,64); hyp_putsxn("virt",virt,64); }
+  ms->maplets[ms->count].virt = virt;
+  ms->maplets[ms->count].phys = phys;
+  ms->maplets[ms->count].prot = prot;
+  ms->count++;
+}
+  
+void _interpret_pgtable(struct maplets *ms, kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy) 
+{
+  u64 idx;
+  u64 va_partial_new;
+  kvm_pte_t pte;
+  enum entry_kind ek;
+  u64 next_level_phys_address, next_level_virt_address;
+
+  for (idx = 0; idx < 512; idx++) {
+    switch (level) {
+    case 0: va_partial_new = va_partial | (idx << 39); break;
+    case 1: va_partial_new = va_partial | (idx << 30); break;
+    case 2: va_partial_new = va_partial | (idx << 21); break;
+    case 3: va_partial_new = va_partial | (idx << 12); break;
+    default: hyp_puts("unhandled level"); // cases are exhaustive
+    }
+      
+    pte = pgd[idx];
+    
+    ek = entry_kind(pte, level);       
+    switch(ek)
+      {
+      case EK_INVALID:             break;
+      case EK_BLOCK:		   check_assert_fail("unhandled EK_BLOCK"); break;
+      case EK_TABLE:
+	next_level_phys_address = pte & GENMASK(47,12);
+	next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
+	// hyp_putsxn("table phys", next_level_phys_address, 64);
+	// hyp_putsxn("table virt", next_level_virt_address, 64);
+	_interpret_pgtable(ms, (kvm_pte_t *)next_level_virt_address, level+1, va_partial_new, noisy); break;
+      case EK_PAGE_DESCRIPTOR:
+	{ u64 oa;
+	  oa = pte & GENMASK(47,12);
+	  // hyp_putsxn("oa", oa, 64);
+	  // now add (va_partial, oa) to the mappings  (ignore prot for now)
+	  if (noisy) { hyp_putsp("interpret_pgtable "); hyp_putsxn("va", va_partial_new, 64); hyp_putsxn("oa", oa, 64); }
+	  extend_maplets(ms,va_partial_new, oa, 0);
+
+	}
+	break;	 
+      case EK_BLOCK_NOT_PERMITTED: check_assert_fail("unhandled EK_BLOCK_NOT_PERMITTED"); break;
+      case EK_RESERVED:		   check_assert_fail("unhandled EK_RESERVED"); break;
+      case EK_DUMMY:               check_assert_fail("unhandled EK_DUMMY"); break;
+      default:                     check_assert_fail("unhandled default");  break;
+      }
+  }
+}
+
+
+void interpret_pgtable(struct maplets *ms, kvm_pte_t *pgd, bool noisy);
+void interpret_pgtable(struct maplets *ms, kvm_pte_t *pgd, bool noisy)
+{
+  ms->count = 0;
+  _interpret_pgtable(ms, pgd, 0, 0, false);
+}
+
+
+
+/* ************************************************************************** 
+ * add the interpretation of the `mapping` range of pages to ms
+ */
+void _interpret_mapping(struct maplets *ms, struct mapping *mapping, bool noisy)
+{
+  u64 i;
+  
+  if (noisy) hyp_putsp("_interpret_mapping "); 
+  for (i=0; i<mapping->size; i++) 
+    extend_maplets(ms, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
+  if (noisy) {
+    hyp_put_mapping(mapping);
+    hyp_putc('\n');
+  }
+}
+
+/* ************************************************************************** 
+ * ms := the interpretation of all the mappings recorded in `mappings` 
+ */
+void interpret_mappings(struct maplets *ms, bool noisy)
+{
+  u64 i;
+  ms->count = 0;
+  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
+    if (mappings[i].kind != HYP_NULL)
+      _interpret_mapping(ms, &mappings[i], noisy);
+  }
+}
+
+
+bool interpret_equals(struct maplets *ms1, struct maplets *ms2)
+{
+  u64 i;
+  //  if (ms1->count != ms2->count) return false;
+  for (i=0; i<ms1->count; i++) {
+    if ( !(ms1->maplets[i].virt == ms2->maplets[i].virt && ms1->maplets[i].phys == ms2->maplets[i].phys) ) {
+      hyp_putsxn("interpret_equals mismatch virt1", ms1->maplets[i].virt, 64);
+      hyp_putsxn("virt2", ms2->maplets[i].virt, 64);
+      hyp_putc('\n');
+      return false;
+    }
+  }
+  return true;
+}
+
+
+static int mapping_compare(const void *lhs, const void *rhs)
+{
+  if (((const struct mapping *)lhs)->virt < ((const struct mapping *)rhs)->virt) return -1;
+  if (((const struct mapping *)lhs)->virt > ((const struct mapping *)rhs)->virt) return 1;
+  return 0;
+}
+
+
+void sort_mappings(void)
+{
+  sort(&mappings, HYP_MAPPING_KIND_NUMBER, sizeof(struct mapping), mapping_compare, NULL);
+}
+
+
+/* **************************************** */
+
+bool check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+{
+  bool new_equal;
+  
+  // new abstraction
+  hyp_puts("sort_mappings");
+  sort_mappings();
+  hyp_puts("hyp_put_mappings");
+  hyp_put_mappings();
+  hyp_puts("interpret_mappings");
+  interpret_mappings(&maplets_a, noisy);
+  interpret_pgtable(&maplets_b, pgd, noisy);
+  new_equal = interpret_equals(&maplets_a, &maplets_b);
+  hyp_putsp("interpret_equals: "); hyp_putbool(new_equal); hyp_putc('\n');
+  
+  // old abstraction
+  _check_hyp_mappings(pgd, false && noisy);
+
+  return new_equal;
 }
