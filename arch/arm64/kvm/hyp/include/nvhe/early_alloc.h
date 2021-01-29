@@ -4,6 +4,9 @@
 
 #include <asm/kvm_pgtable.h>
 
+// PS HACK TO EXPOSE cur
+unsigned long hyp_early_alloc_cur(void);
+
 void hyp_early_alloc_init(void *virt, unsigned long size);
 unsigned long hyp_early_alloc_nr_pages(void);
 void *hyp_early_alloc_page(void *arg);

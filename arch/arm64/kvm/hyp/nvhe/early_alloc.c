@@ -15,6 +15,13 @@ static unsigned long base;
 static unsigned long end;
 static unsigned long cur;
 
+// PS HACK TO EXPOSE cur
+unsigned long hyp_early_alloc_cur(void)
+{
+  return cur;
+}
+
+
 unsigned long hyp_early_alloc_nr_pages(void)
 {
 	return (cur - base) >> PAGE_SHIFT;

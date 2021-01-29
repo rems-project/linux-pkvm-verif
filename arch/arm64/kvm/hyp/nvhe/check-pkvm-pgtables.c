@@ -59,6 +59,8 @@ virt:0x00008000c03b9000 phys:0x00000001003b9000 size:0x0000000000000001 -RW- HYP
 #include <nvhe/mm.h>
 #include <linux/bits.h>
 
+#include <nvhe/early_alloc.h>
+
 #include <asm/kvm_mmu.h>
 #include <../debug-pl011.h>
 
@@ -71,6 +73,8 @@ extern void *vmemmap_base;
 extern void *hyp_pgt_base;
 extern void *host_s2_mem_pgt_base;
 extern void *host_s2_dev_pgt_base;
+
+extern void *early_remainder;
 
 extern unsigned long stacks_size;
 extern unsigned long vmemmap_size;              
@@ -510,7 +514,7 @@ enum mapping_kind {
   HYP_S1_PGTABLE,
   HYP_S2_MEM_PGTABLE,
   HYP_S2_DEV_PGTABLE,
-  HYP_ALL_WORKSPACE,
+  HYP_WORKSPACE,
   HYP_VMEMMAP_MAP,
   HYP_UART,
   HYP_PERCPU,
@@ -556,7 +560,7 @@ void hyp_put_mapping_kind(enum mapping_kind kind)
   case HYP_S2_DEV_PGTABLE:hyp_putsp("HYP_S2_DEV_PGTABLE"); break;
   case HYP_VMEMMAP_MAP:	  hyp_putsp("HYP_VMEMMAP_MAP   "); break;
   case HYP_UART:	  hyp_putsp("HYP_UART          "); break;
-  case HYP_ALL_WORKSPACE: hyp_putsp("HYP_ALL_WORKSPACE "); break;
+  case HYP_WORKSPACE:     hyp_putsp("HYP_WORKSPACE     "); break;
   default:
     if (kind >= HYP_PERCPU && kind < HYP_PERCPU + MAX_CPUS)
       {
@@ -576,8 +580,9 @@ void hyp_put_mapping(struct mapping *map)
     hyp_putsp("HYP_MAPPING_NULL");
   else {
     hyp_putsxn("virt",map->virt,64);
+    hyp_putsxn("virt'",(map->virt + PAGE_SIZE*map->size),64);
     hyp_putsxn("phys",map->phys,64);
-    hyp_putsxn("size",map->size,64);
+    hyp_putsxn("size",(u32)map->size,32);
     hyp_put_prot(map->prot);
     hyp_put_mapping_kind(map->kind);
     if (map->kind >= HYP_PERCPU && map->kind < HYP_PERCPU + MAX_CPUS) hyp_putsxn("cpu",map->cpu,64);
@@ -984,6 +989,8 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
 
   // I don't understand how the __kvm_hyp_protect_finalise installation of the buddy allocator relates to the host_s2 parts of the divide_memory_pool
   // record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace", host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, (void*)hyp_phys_to_virt(phys) + size - 1 - host_s2_dev_pgt_base - PAGE_SIZE*host_s2_dev_pgt_size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
+  //record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace",  (void*)hyp_phys_to_virt(phys) + PAGE_SIZE*hyp_early_alloc_nr_pages(), (void*)hyp_phys_to_virt(phys)+size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
+  record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace",  early_remainder, (void*)hyp_phys_to_virt(phys)+size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
 
 
   // the per-cpu variables.
@@ -1165,7 +1172,7 @@ void interpret_mappings(struct maplets *ms, bool noisy)
 bool interpret_equals(struct maplets *ms1, struct maplets *ms2)
 {
   u64 i;
-  //  if (ms1->count != ms2->count) return false;
+  if (ms1->count != ms2->count) return false;
   for (i=0; i<ms1->count; i++) {
     if ( !(ms1->maplets[i].virt == ms2->maplets[i].virt && ms1->maplets[i].phys == ms2->maplets[i].phys) ) {
       hyp_putsxn("interpret_equals mismatch virt1", ms1->maplets[i].virt, 64);

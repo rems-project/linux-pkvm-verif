@@ -55,6 +55,7 @@ void *vmemmap_base;
 void *hyp_pgt_base;
 void *host_s2_mem_pgt_base;
 void *host_s2_dev_pgt_base;
+void *early_remainder;
 
 unsigned long stacks_size;
 unsigned long vmemmap_size;              
@@ -98,6 +99,9 @@ static int divide_memory_pool(void *virt, unsigned long size)
 	if (!host_s2_dev_pgt_base)
 		return -ENOMEM;
 
+	// PS HACK: record start of remainder
+	early_remainder = (void*)hyp_early_alloc_cur();
+	
 	return 0;
 }
 
