@@ -88,8 +88,6 @@ extern unsigned long host_s2_dev_pgt_size;
 			 (unsigned long)__per_cpu_start)
 
 
-// horrible hack for max CPUs - later find out how to do this properly 
-#define MAX_CPUS 8
 
 
 
@@ -136,6 +134,13 @@ void hyp_putsxn(char *s, unsigned long x, int n)
 }
 
 
+void check_assert_fail(char *s)
+{
+  hyp_putsp("check_assert_fail: ");
+  hyp_putsp(s);
+  hyp_putc('\n');
+}
+
 
 /* ************************************************************************** 
  * Armv8-A page-table entries
@@ -160,6 +165,7 @@ enum entry_kind {
 #define ENTRY_PAGE_DESCRIPTOR 3
 #define ENTRY_TABLE 3
 
+// compute the entry_kind of a page-table entry
 enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
 {
   switch(level)
@@ -185,7 +191,7 @@ enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
 	  case ENTRY_TABLE: 
 	    return EK_TABLE;
 	  default:
-	    return EK_DUMMY; // this is just to tell the compiler that the cases are exhaustive
+	    return EK_DUMMY; // just to tell the compiler that the cases are exhaustive
 	  }
       }
     case 3: 
@@ -201,9 +207,11 @@ enum entry_kind entry_kind(kvm_pte_t pte, u8 level)
 	}
     
     default:
-      return EK_DUMMY; // this is just to tell the compiler that the cases are exhaustive
+      return EK_DUMMY; // just to tell the compiler that the cases are exhaustive
     }
 }
+
+// print entries
 
 void hyp_put_ek(enum entry_kind ek)
 {
@@ -244,11 +252,9 @@ void hyp_put_entry(kvm_pte_t pte, u8 level)
 
 
 
-
-
-
 /* ************************************************************************** 
- * very crude dump of Armv8-A page tables, starting at pgd, with any sub-tables
+ * print Armv8-A page tables, starting at pgd, with any sub-tables
+ * (ignoring many things)
  */
 
 void _dump_pgtable(u64 *pgd, u8 level)
@@ -497,9 +503,8 @@ struct AddressDescriptor AArch64_FirstStageTranslate(uint64_t table_base, uint64
 
 
 
-/* ************************************************************************** 
- * abstraction of pKVM mappings
- */
+/* ************************************************************************** */
+/* abstraction of pKVM intended mappings */
 
 enum mapping_kind {
   HYP_NULL,
@@ -518,22 +523,67 @@ enum mapping_kind {
   HYP_VMEMMAP_MAP,
   HYP_UART,
   HYP_PERCPU,
-  HYP_MAPPING_KIND_NUMBER=HYP_PERCPU + MAX_CPUS
+  HYP_MAPPING_KIND_NUMBER=HYP_PERCPU
 };
+
+#define MAX_MAPPINGS HYP_MAPPING_KIND_NUMBER -1 + NR_CPUS
 
 #define DUMMY_CPU 0
 
+// abstracts to:
+// - itself, i.e. to the canonical interpretation for data structures (especially simple as this contains no pointers)
 struct mapping {
-  char *doc;                        // documentation string
   enum mapping_kind kind;           // the kind of this mapping     
-  u64 cpu;                          // cpu ID for HYP_PERCPU mappings; 0 otherwise
+  u64 cpu;                          // cpu ID in 0..NR_CPUS-1 for HYP_PERCPU mappings; 0 otherwise
   u64 virt;                         // pKVM EL2 after-the-switch start virtual address, page-aligned
   phys_addr_t phys;                 // start physical address, page-aligned
   u64 size;                         // size, as the number of 4k pages
   enum kvm_pgtable_prot prot;       // protection
+  char *doc;                        // documentation string, ignore in maths
 };
 
-struct mapping mappings[HYP_MAPPING_KIND_NUMBER];
+// invariants:
+// - after construction, sorted by virtual address
+// - non-overlapping virtual address ranges
+// - at most one per mapping_kind except HYP_PERCPU, for which at most one for each cpu up to NR_CPUS
+// - count <= MAX_MAPPINGS
+// abstracts to:
+// - a finite set of [[struct mapping]] also satisfying the above
+struct mappings {
+  struct mapping m[MAX_MAPPINGS];  
+  u64 count;
+};
+
+// most of our checker code treats datastructures pseudo-functionally,
+// but we have to allocate them somehow, and we can't put them on the
+// stack as pKVM has only one page of stack per-CPU.  We also want to
+// hide this from the setup.c call sites, where mappings data has to
+// flow from record_hyp_mappings to later check_hyp_mappings.  So we
+// just make global variables, but we use them explicitly only in the
+// top-level functions of this file; below that we pass pointers to
+// them around.
+static struct mappings mappings;
+
+
+/* sort mappings by virtual address*/
+
+/* we do this after construction with the linux heapsort, as it's
+   handy, but it might be tidier to maintain sortedness during
+   construction */
+
+static int mapping_compare(const void *lhs, const void *rhs)
+{
+  if (((const struct mapping *)lhs)->virt < ((const struct mapping *)rhs)->virt) return -1;
+  if (((const struct mapping *)lhs)->virt > ((const struct mapping *)rhs)->virt) return 1;
+  return 0;
+}
+
+void sort_mappings(struct mappings *mappings)
+{
+  sort(mappings, HYP_MAPPING_KIND_NUMBER, sizeof(struct mapping), mapping_compare, NULL);
+}
+
+/* print mappings */
 
 void hyp_put_prot(enum kvm_pgtable_prot prot)
 {
@@ -561,15 +611,8 @@ void hyp_put_mapping_kind(enum mapping_kind kind)
   case HYP_VMEMMAP_MAP:	  hyp_putsp("HYP_VMEMMAP_MAP   "); break;
   case HYP_UART:	  hyp_putsp("HYP_UART          "); break;
   case HYP_WORKSPACE:     hyp_putsp("HYP_WORKSPACE     "); break;
-  default:
-    if (kind >= HYP_PERCPU && kind < HYP_PERCPU + MAX_CPUS)
-      {
-	hyp_putsp("HYP_PERCPU   "); break;
-      }
-    else
-      {
-	hyp_putsp("unknown mapping kind"); break;
-      }
+  case HYP_PERCPU:        hyp_putsp("HYP_PERCPU        "); break;
+  default:                hyp_putsp("unknown mapping kind"); break;
   }
   hyp_putsp(" ");
 }
@@ -585,16 +628,16 @@ void hyp_put_mapping(struct mapping *map)
     hyp_putsxn("size",(u32)map->size,32);
     hyp_put_prot(map->prot);
     hyp_put_mapping_kind(map->kind);
-    if (map->kind >= HYP_PERCPU && map->kind < HYP_PERCPU + MAX_CPUS) hyp_putsxn("cpu",map->cpu,64);
+    if (map->kind == HYP_PERCPU) hyp_putsxn("cpu",map->cpu,64);
     hyp_putsp(map->doc);
   }
 }
 
-void hyp_put_mappings(void)
+void hyp_put_mappings(struct mappings *mappings)
 {
-  int i;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
-    hyp_put_mapping(&mappings[i]);
+  u64 i;
+  for (i=0; i<mappings->count; i++) {
+    hyp_put_mapping(&mappings->m[i]);
     hyp_putc('\n');
   }
 }
@@ -604,12 +647,16 @@ void hyp_put_mappings(void)
   
 
 
-/* ************************************************************************** 
- * check that a specific virt |-> (phys,prot) is included in the pagetables at pgd, 
- * using the Armv8-A page-table walk function 
- * TODO: ignoring prot for now
+/* ************************************************************************** */
+/* forwards check, that intended mappings are included in the actual page tables 
+ * ignoring prot for now
  */
-bool _check_hyp_mapping_fwd(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
+
+
+/* check that a specific virt |-> (phys,prot) is included in the pagetables at pgd, 
+ * using the Armv8-A page-table walk function 
+ */
+bool _check_hyp_mapping_fwd(u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot, kvm_pte_t *pgd)
 {
 
   struct AddressDescriptor ad = AArch64_FirstStageTranslate((uint64_t)pgd, virt);
@@ -623,43 +670,42 @@ bool _check_hyp_mapping_fwd(kvm_pte_t *pgd, u64 virt, phys_addr_t phys, enum kvm
     }
 }
 
-/* ************************************************************************** 
- * check the `mapping` range of pages are included in the pagetables at `pgd`
- */
-bool check_hyp_mapping_fwd(kvm_pte_t *pgd, struct mapping *mapping)
+
+/* check the `mapping` range of pages are included in the pagetables at `pgd` */
+bool check_hyp_mapping_fwd(struct mapping *mapping, kvm_pte_t *pgd, bool noisy)
 {
   u64 i;
   bool ret;
   
-  hyp_putsp("check_hyp_mapping_fwd "); 
   ret = true;
   for (i=0; i<mapping->size; i++) 
-    ret = ret && _check_hyp_mapping_fwd(pgd, mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot);
-  hyp_putbool(ret);
-  hyp_putc(' ');
-  hyp_put_mapping(mapping);
-  hyp_putc('\n');
+    ret = ret && _check_hyp_mapping_fwd(mapping->virt + i*PAGE_SIZE, mapping->phys + i*PAGE_SIZE, mapping->prot, pgd);
+
+  if (noisy) {
+    hyp_putsp("check_hyp_mapping_fwd "); 
+    hyp_putbool(ret);
+    hyp_putc(' ');
+    hyp_put_mapping(mapping);
+    hyp_putc('\n');
+  }
   return ret;
 }
 
-/* ************************************************************************** 
- * check that all the mappings recorded in `mappings` are included in the pagetables at `pgd`
- */
-bool check_hyp_mappings_fwd(kvm_pte_t *pgd)
+/* check that all the mappings recorded in `mappings` are included in the pagetables at `pgd` */
+bool check_hyp_mappings_fwd(struct mappings *mappings, kvm_pte_t *pgd, bool noisy)
 {
   bool ret;
   u64 i;
   ret = true;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
-    if (mappings[i].kind != HYP_NULL)
-      ret = ret && check_hyp_mapping_fwd(pgd,&mappings[i]);
+  for (i=0; i < mappings->count; i++) {
+    ret = ret && check_hyp_mapping_fwd(&mappings->m[i], pgd, noisy);
   }
   return ret;
 }
 
 
 /* ************************************************************************** 
- * check all the mappings in the pagetables at `pgd` are included in those recorded in `mappings`
+ * reverse check, that  all the mappings in the pagetables at `pgd` are included in those recorded in `mappings`
  */
 
 // Mathematically one would do this with a single quantification over
@@ -674,36 +720,33 @@ bool check_hyp_mappings_fwd(kvm_pte_t *pgd)
 // compute a more explicit representation of the denotation of a page
 // table and of the collection of mappings and check equality. That
 // would be mathematically cleaner but more algorithmically complex,
-// and involve more allocation.
+// and involve more allocation.  We do that below.
 
 // check (virt,phys) is in at least one of the `mappings`
-bool _check_hyp_mappings_rev(u64 virt, phys_addr_t phys, bool noisy)
+bool _check_hyp_mappings_rev(struct mappings *mappings, u64 virt, phys_addr_t phys, bool noisy)
 {
   int i;
-  u64 count;
-  count=0;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
-    if (mappings[i].kind != HYP_NULL)
-      {
-	if (virt >= mappings[i].virt && virt < mappings[i].virt + PAGE_SIZE*mappings[i].size && phys == mappings[i].phys + (virt - mappings[i].virt)) {
-	  count++;
-	  if (noisy) {
-	    hyp_put_mapping_kind(mappings[i].kind);
-	    hyp_putc(' ');
-	    if (count > 1) hyp_putsp("duplicate ");
-	  }
-	}
+  u64 occs;
+  occs=0;
+  for (i=0; i < mappings->count; i++) {
+    if (virt >= mappings->m[i].virt && virt < mappings->m[i].virt + PAGE_SIZE*mappings->m[i].size && phys == mappings->m[i].phys + (virt - mappings->m[i].virt)) {
+      occs++;
+      if (noisy) {
+	hyp_put_mapping_kind(mappings->m[i].kind);
+	hyp_putc(' ');
+	if (occs > 1) hyp_putsp("duplicate ");
       }
+    }
   }
   if (noisy)
-    if (count == 0) hyp_putsp("not found ");
-  return (count >= 1);
+    if (occs == 0) hyp_putsp("not found ");
+  return (occs >= 1);
 }
 
 // very crude recurse over the Armv8-A page tables at `pgd`, checking that each leaf
 // (virt,phys) is in at least one of the mappings
-bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy);
-bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy) 
+bool check_hyp_mappings_rev(struct mappings *mappings, kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy);
+bool check_hyp_mappings_rev(struct mappings *mappings, kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy) 
 {
   bool ret, entry;
   u64 idx;
@@ -734,14 +777,14 @@ bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy
 	next_level_virt_address = (u64)hyp_phys_to_virt((phys_addr_t)next_level_phys_address);
 	// hyp_putsxn("table phys", next_level_phys_address, 64);
 	//hyp_putsxn("table virt", next_level_virt_address, 64);
-	entry =check_hyp_mappings_rev((kvm_pte_t *)next_level_virt_address, level+1, va_partial_new, noisy); break;
+	entry =check_hyp_mappings_rev(mappings, (kvm_pte_t *)next_level_virt_address, level+1, va_partial_new, noisy); break;
       case EK_PAGE_DESCRIPTOR:
 	{ u64 oa;
 	  oa = pte & GENMASK(47,12);
 	  //hyp_putsxn("oa", oa, 64);
 	  // now check (va_partial, oa) is in one of the mappings  (ignore prot for now, but should check)
 	  if (noisy) { hyp_putsp("check_hyp_mappings_rev "); hyp_putsxn("va", va_partial_new, 64); hyp_putsxn("oa", oa, 64); }
-	  entry = _check_hyp_mappings_rev(va_partial_new, oa, noisy);
+	  entry = _check_hyp_mappings_rev(mappings, va_partial_new, oa, noisy);
 	  if (noisy) { hyp_putbool(entry); hyp_putc('\n'); }
 
 	}
@@ -759,15 +802,6 @@ bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy
 
 
 
-
-
-
-
-  
-
-
-
-
 /* ************************************************************************** 
  * check forward and reverse inclusions of the mappings in the pagetables at `pgd` and those recorded in `mappings`
  */
@@ -778,11 +812,11 @@ bool check_hyp_mappings_rev(kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy
 // hyp_pgtable.pgd
 
 
-bool _check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+bool check_hyp_mappings_both(struct mappings *mappings, kvm_pte_t *pgd, bool noisy) 
 {
   bool ret, fwd, rev;
-  fwd = check_hyp_mappings_fwd(pgd);
-  rev = check_hyp_mappings_rev(pgd, 0, 0, noisy);
+  fwd = check_hyp_mappings_fwd(mappings, pgd, noisy);
+  rev = check_hyp_mappings_rev(mappings, pgd, 0, 0, noisy);
 
   // and we need to check disjointness of most of them. Disjointness
   // in a world with address translation is interesting... and there's
@@ -790,90 +824,88 @@ bool _check_hyp_mappings(kvm_pte_t *pgd, bool noisy)
   // account
 
   ret = fwd && rev;
-  hyp_putsp("check_hyp_mappings: "); hyp_putbool(ret); hyp_putc('\n');
+  hyp_putsp("check_hyp_mappings_both: "); hyp_putbool(ret); hyp_putc('\n');
   return ret;
 }
 
 
 
-
-
-
-
-
-
-
 /* ************************************************************************** 
- * record a mapping for a range of hypervisor virtual addresses 
+ * record the intended pKVM mappings
  */
 
-void record_hyp_mapping_virt(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+// record a mapping for a range of hypervisor virtual addresses 
+void extend_mappings_virt(struct mappings *mappings, enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
   u64 virt_from_aligned, virt_to_aligned;
   u64 size;
   phys_addr_t phys;
+  if (mappings->count >= MAX_MAPPINGS) check_assert_fail("extend_mappings_virt full");
+
   virt_from_aligned = (u64)virt_from & PAGE_MASK;
   virt_to_aligned = PAGE_ALIGN((u64)virt_to);
   size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
   phys = hyp_virt_to_phys((void*)virt_from_aligned);
 
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = virt_from_aligned;
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
+  mappings->m[mappings->count].doc = doc;
+  mappings->m[mappings->count].kind = kind;
+  mappings->m[mappings->count].cpu = cpu;
+  mappings->m[mappings->count].virt = virt_from_aligned;
+  mappings->m[mappings->count].phys = phys;
+  mappings->m[mappings->count].size = size;
+  mappings->m[mappings->count].prot = prot;
+  mappings->count++;
 }
 
-/* ************************************************************************** 
- * record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
- */
-void record_hyp_mapping_image_idmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
+// record the mapping for the idmap, adapting hyp_create_idmap from arch/arm64/kvm/hyp/nvhe/mm.c 
+void extend_mappings_image_idmap(struct mappings *mappings, enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, enum kvm_pgtable_prot prot)
 {
   u64 virt_from_aligned, virt_to_aligned;
   u64 size;
   phys_addr_t phys;
+  if (mappings->count >= MAX_MAPPINGS) check_assert_fail("extend_mappings_image_idmap full");
+
   virt_from_aligned = (u64)virt_from & PAGE_MASK;
   virt_to_aligned = PAGE_ALIGN((u64)virt_to);
   size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
   phys = hyp_virt_to_phys((void*)virt_from_aligned);
 
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = phys; 
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
+  mappings->m[mappings->count].doc = doc;
+  mappings->m[mappings->count].kind = kind;
+  mappings->m[mappings->count].cpu = cpu;
+  mappings->m[mappings->count].virt = phys;  // NB
+  mappings->m[mappings->count].phys = phys;
+  mappings->m[mappings->count].size = size;
+  mappings->m[mappings->count].prot = prot;
+  mappings->count++;
 }
 
 
-/* ************************************************************************** 
- * record a mapping for a range of hypervisor virtual addresses to a specific physical address, for the vmemmap
- */
-void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, phys_addr_t phys, enum kvm_pgtable_prot prot)
+// record a mapping for a range of hypervisor virtual addresses to a specific physical address, for the vmemmap
+void extend_mappings_vmemmap(struct mappings *mappings, enum mapping_kind kind, u64 cpu, char *doc, void *virt_from, void *virt_to, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
   u64 virt_from_aligned, virt_to_aligned;
   u64 size;
+  if (mappings->count >= MAX_MAPPINGS) check_assert_fail("extend_mappings_vmemmap full");
+
   virt_from_aligned = (u64)virt_from & PAGE_MASK;
   virt_to_aligned = PAGE_ALIGN((u64)virt_to);
   size = (virt_to_aligned - virt_from_aligned) >> PAGE_SHIFT;  
 
-  mappings[kind].doc = doc;
-  mappings[kind].kind = kind;
-  mappings[kind].cpu = cpu;
-  mappings[kind].virt = virt_from_aligned; 
-  mappings[kind].phys = phys;
-  mappings[kind].size = size;
-  mappings[kind].prot = prot;
+  mappings->m[mappings->count].doc = doc;
+  mappings->m[mappings->count].kind = kind;
+  mappings->m[mappings->count].cpu = cpu;
+  mappings->m[mappings->count].virt = virt_from_aligned; 
+  mappings->m[mappings->count].phys = phys;
+  mappings->m[mappings->count].size = size;
+  mappings->m[mappings->count].prot = prot;
+  mappings->count++;
 }
 
 
-///* ************************************************************************** 
-// * record a mapping for the uart  IN PROGRESS
+// * record a mapping for the uart  TODO
 // */
-//void record_hyp_mapping_uart(void);
+//void extend_mappings_uart(void);
 //{
 //  phys_addr_t phys = CONFIG_KVM_ARM_HYP_DEBUG_UART_ADDR;
 //  enum kvm_pgtable_prot prot = PAGE_HYP_DEVICE;
@@ -896,11 +928,8 @@ void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void
 //}
 
 
-
-
-
-/* ************************************************************************** 
- * record the pKVM mappings  
+/* 
+ * record all the pKVM mappings  
  *
  * As written this duplicates some of the setup.c code that constructs
  * the actual mappings. That duplication is somewhat useful for us to
@@ -909,17 +938,13 @@ void record_hyp_mapping_vmemmap(enum mapping_kind kind, u64 cpu, char *doc, void
  * more invasive w.r.t. the non-verification code, so this might be
  * preferable in practice for now in any case.
  */
-void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
+void _record_hyp_mappings(struct mappings *mappings, phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
 
-  void *virt;   
-
-  // horrible hack for number of CPUs
-  if (nr_cpus > MAX_CPUS) {
-    hyp_puts("record_hyp_mappings nr_cpus > MAX_CPUS");
+  if (nr_cpus > NR_CPUS) {
+    check_assert_fail("record_hyp_mappings nr_cpus > NR_CPUS");
     return;
   }
-  
   
   // the vectors
   // TODO: recreate_hyp_mappings in setup.c calls hyp_map_vectors in
@@ -929,35 +954,35 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
   // of "private mapping" is - and don't want to think about that
   // right now.  It doesn't seem to actually be used in the QEMU
   // execution - perhaps Cortex-A72 doesn't have the required
-  // cpus_have_const_cap(ARM64_SPECTRE_V3A)
+  // cpus_have_const_cap(ARM64_SPECTRE_V3A) - so I punt on it for now.
   
   // the rest of the image
 
-  record_hyp_mapping_virt(HYP_TEXT, DUMMY_CPU, "hyp_symbol_addr(__hyp_text_start)",
+  extend_mappings_virt(mappings, HYP_TEXT, DUMMY_CPU, "hyp_symbol_addr(__hyp_text_start)",
 				hyp_symbol_addr(__hyp_text_start),
 				hyp_symbol_addr(__hyp_text_end),
 				PAGE_HYP_EXEC);
   
-  record_hyp_mapping_virt(HYP_RODATA, DUMMY_CPU, "hyp_symbol_addr(__start_rodata)",
+  extend_mappings_virt(mappings, HYP_RODATA, DUMMY_CPU, "hyp_symbol_addr(__start_rodata)",
 				hyp_symbol_addr(__start_rodata),
 				hyp_symbol_addr(__end_rodata), PAGE_HYP_RO);
   
-  record_hyp_mapping_virt(HYP_RODATA2, DUMMY_CPU, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
+  extend_mappings_virt(mappings, HYP_RODATA2, DUMMY_CPU, "hyp_symbol_addr(__hyp_data_ro_after_init_start)",
 				hyp_symbol_addr(__hyp_data_ro_after_init_start),
 				hyp_symbol_addr(__hyp_data_ro_after_init_end),
 				PAGE_HYP_RO);
   
-  record_hyp_mapping_virt(HYP_BSS, DUMMY_CPU, "hyp_symbol_addr(__bss_start)",
+  extend_mappings_virt(mappings, HYP_BSS, DUMMY_CPU, "hyp_symbol_addr(__bss_start)",
 				hyp_symbol_addr(__bss_start),
 				hyp_symbol_addr(__hyp_bss_end), PAGE_HYP);
   
-  record_hyp_mapping_virt(HYP_BSS2, DUMMY_CPU, "hyp_symbol_addr(__hyp_bss_end)",
+  extend_mappings_virt(mappings, HYP_BSS2, DUMMY_CPU, "hyp_symbol_addr(__hyp_bss_end)",
 				hyp_symbol_addr(__hyp_bss_end),
 				hyp_symbol_addr(__bss_stop), PAGE_HYP_RO);
 
   // the idmap
 
-  record_hyp_mapping_image_idmap(HYP_IDMAP, DUMMY_CPU, "hyp_symbol_addr(__hyp_idmap_text_start)",
+  extend_mappings_image_idmap(mappings, HYP_IDMAP, DUMMY_CPU, "hyp_symbol_addr(__hyp_idmap_text_start)",
 				 hyp_symbol_addr(__hyp_idmap_text_start),
 				 hyp_symbol_addr(__hyp_idmap_text_end), PAGE_HYP_EXEC);
 
@@ -971,26 +996,17 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
   // vmemmap_base, hyp_pgt_base, host_s2_mem_pgt_base,
   // host_s2_dev_pgt_base; then the remainder (after the switch) is
   // handed to the buddy allocator. We want to check those
-  // pieces separately, so split this up, but for now also record the
-  // workspace as a whole.
+  // pieces separately, so split this up.
   
-  //  the whole workspace:
-  //  virt = hyp_phys_to_virt(phys);
-  //  record_hyp_mapping_virt(HYP_ALL_WORKSPACE, DUMMY_CPU, "all non-per-cpu workspace",
-  //  			       virt,
-  //  virt + size - 1, PAGE_HYP);
-
-  // the individual pieces:
-  record_hyp_mapping_virt(HYP_STACKS, DUMMY_CPU, "hyp stacks", stacks_base, stacks_base + PAGE_SIZE*stacks_size, PAGE_HYP);
-  record_hyp_mapping_virt(HYP_VMEMMAP, DUMMY_CPU, "vmemmap", vmemmap_base, vmemmap_base + PAGE_SIZE*vmemmap_size, PAGE_HYP);
-  record_hyp_mapping_virt(HYP_S1_PGTABLE, DUMMY_CPU, "s1 pgtable", hyp_pgt_base, hyp_pgt_base + PAGE_SIZE*hyp_pgt_size, PAGE_HYP);
-  record_hyp_mapping_virt(HYP_S2_MEM_PGTABLE, DUMMY_CPU, "s2 mem pgtable", host_s2_mem_pgt_base, host_s2_mem_pgt_base + PAGE_SIZE*host_s2_mem_pgt_size, PAGE_HYP);
-  record_hyp_mapping_virt(HYP_S2_DEV_PGTABLE, DUMMY_CPU, "s2 dev pgtable", host_s2_dev_pgt_base, host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, PAGE_HYP);
+  extend_mappings_virt(mappings, HYP_STACKS, DUMMY_CPU, "hyp stacks", stacks_base, stacks_base + PAGE_SIZE*stacks_size, PAGE_HYP);
+  extend_mappings_virt(mappings, HYP_VMEMMAP, DUMMY_CPU, "vmemmap", vmemmap_base, vmemmap_base + PAGE_SIZE*vmemmap_size, PAGE_HYP);
+  extend_mappings_virt(mappings, HYP_S1_PGTABLE, DUMMY_CPU, "s1 pgtable", hyp_pgt_base, hyp_pgt_base + PAGE_SIZE*hyp_pgt_size, PAGE_HYP);
+  extend_mappings_virt(mappings, HYP_S2_MEM_PGTABLE, DUMMY_CPU, "s2 mem pgtable", host_s2_mem_pgt_base, host_s2_mem_pgt_base + PAGE_SIZE*host_s2_mem_pgt_size, PAGE_HYP);
+  extend_mappings_virt(mappings, HYP_S2_DEV_PGTABLE, DUMMY_CPU, "s2 dev pgtable", host_s2_dev_pgt_base, host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, PAGE_HYP);
 
   // I don't understand how the __kvm_hyp_protect_finalise installation of the buddy allocator relates to the host_s2 parts of the divide_memory_pool
-  // record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace", host_s2_dev_pgt_base + PAGE_SIZE*host_s2_dev_pgt_size, (void*)hyp_phys_to_virt(phys) + size - 1 - host_s2_dev_pgt_base - PAGE_SIZE*host_s2_dev_pgt_size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
-  //record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace",  (void*)hyp_phys_to_virt(phys) + PAGE_SIZE*hyp_early_alloc_nr_pages(), (void*)hyp_phys_to_virt(phys)+size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
-  record_hyp_mapping_virt(HYP_WORKSPACE, DUMMY_CPU, "workspace",  early_remainder, (void*)hyp_phys_to_virt(phys)+size,PAGE_HYP); // ugly calculation of what should be the remaining early allocator space
+  // but this is the remaining early allocator space
+  extend_mappings_virt(mappings, HYP_WORKSPACE, DUMMY_CPU, "workspace",  early_remainder, (void*)hyp_phys_to_virt(phys)+size,PAGE_HYP); 
 
 
   // the per-cpu variables.
@@ -1001,7 +1017,7 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
       for (i = 0; i < nr_cpus; i++) {
         start = (void *)kern_hyp_va(per_cpu_base[i]);  // is per_cpu_base all the linux per-cpu variables, or what??
         end = start + PAGE_ALIGN(hyp_percpu_size);     // with the hyp per-cpu variables at the start??
-        record_hyp_mapping_virt(HYP_PERCPU+i, i, "per-cpu variables", start, end, PAGE_HYP);
+        extend_mappings_virt(mappings, HYP_PERCPU, i, "per-cpu variables", start, end, PAGE_HYP);
       }
     }
     
@@ -1013,64 +1029,51 @@ void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsi
       
       vmemmap_back = hyp_virt_to_phys(vmemmap_base);
       hyp_vmemmap_range(phys, size, &vmemmap_start, &vmemmap_end);
-      record_hyp_mapping_vmemmap(HYP_VMEMMAP_MAP, DUMMY_CPU, "vmemmap", (void*)vmemmap_start, (void*)vmemmap_end, vmemmap_back, PAGE_HYP);
+      extend_mappings_vmemmap(mappings, HYP_VMEMMAP_MAP, DUMMY_CPU, "vmemmap", (void*)vmemmap_start, (void*)vmemmap_end, vmemmap_back, PAGE_HYP);
     }
 
+    sort_mappings(mappings);
     
-  hyp_put_mappings();
+    hyp_put_mappings(mappings);
 
-  
 }
 
-
-
-
-/*
- */
-
-void dump_kvm_nvhe_init_params(struct kvm_nvhe_init_params *params)
+// apply the above to the global variable `mappings`
+void record_hyp_mappings(phys_addr_t phys, uint64_t size, uint64_t nr_cpus, unsigned long *per_cpu_base)
 {
-        hyp_putsxn("mair_el2    ", params->mair_el2     , 64); hyp_putc('\n');
-        hyp_putsxn("tcr_el2     ", params->tcr_el2      , 64); hyp_putc('\n');
-        hyp_putsxn("tpidr_el2   ", params->tpidr_el2    , 64); hyp_putc('\n');
-        hyp_putsxn("stack_hyp_va", params->stack_hyp_va , 64); hyp_putc('\n');
-        hyp_putsxn("pgd_pa      ", (unsigned long)params->pgd_pa       , 64); hyp_putc('\n');
-        hyp_putsxn("hcr_el2     ", params->hcr_el2      , 64); hyp_putc('\n');
-        hyp_putsxn("vttbr       ", params->vttbr        , 64); hyp_putc('\n');
-        hyp_putsxn("vtcr        ", params->vtcr         , 64); hyp_putc('\n');
+  _record_hyp_mappings(&mappings, phys, size, nr_cpus, per_cpu_base);
 }
-
-
-
 
 
 /* *********************************************************** */
 /* new abstraction */
 
 struct maplet {
-  u64 virt;                   // must be page-aligned      
-  phys_addr_t phys;           // must be page-aligned
+  u64 virt;                   // page-aligned      
+  phys_addr_t phys;           // page-aligned
   enum kvm_pgtable_prot prot; // punting on this for now
 };
 
 #define MAX_MAPLETS 100000     // arbitrary hack - better to calculate how big this must be and get linux to give us enough memory for them up-front
 
+
+// invariant:
+// - functional and sorted by virt
+// - count <= MAX_MAPLETS
+// abstracts to:
+// - a finite map from virtual addresses to (phys,prot) records
 struct maplets {
   struct maplet maplets[MAX_MAPLETS];  // must be sorted by virtual address
   u64 count;
 };
 
-static struct maplets maplets_a, maplets_b, maplets_c;
+static struct maplets maplets_a, maplets_b;
 
 
 
-void check_assert_fail(char *s)
-{
-  hyp_putsp("check_assert_fail: ");
-  hyp_putsp(s);
-  hyp_putc('\n');
-}
-
+// extend maplets with one new maplet
+// precondition:
+// - virt is strictly greater than the virt of any existing maplet
 void extend_maplets(struct maplets *ms, u64 virt, phys_addr_t phys, enum kvm_pgtable_prot prot)
 {
   if (ms->count >= MAX_MAPLETS) check_assert_fail("extend maplets full");
@@ -1080,7 +1083,28 @@ void extend_maplets(struct maplets *ms, u64 virt, phys_addr_t phys, enum kvm_pgt
   ms->maplets[ms->count].prot = prot;
   ms->count++;
 }
-  
+
+// equality check of maplets
+bool interpret_equals(struct maplets *ms1, struct maplets *ms2)
+{
+  u64 i;
+  if (ms1->count != ms2->count) return false;
+  for (i=0; i<ms1->count; i++) {
+    if ( !(ms1->maplets[i].virt == ms2->maplets[i].virt && ms1->maplets[i].phys == ms2->maplets[i].phys) ) {
+      hyp_putsxn("interpret_equals mismatch virt1", ms1->maplets[i].virt, 64);
+      hyp_putsxn("virt2", ms2->maplets[i].virt, 64);
+      hyp_putc('\n');
+      return false;
+    }
+  }
+  return true;
+}
+
+
+/* *********************************************************** */
+/* compute interpretation of pagetables at `pgd`, ms = [[pgd]]
+ */
+
 void _interpret_pgtable(struct maplets *ms, kvm_pte_t *pgd, u8 level, u64 va_partial, bool noisy) 
 {
   u64 idx;
@@ -1140,7 +1164,7 @@ void interpret_pgtable(struct maplets *ms, kvm_pte_t *pgd, bool noisy)
 
 
 /* ************************************************************************** 
- * add the interpretation of the `mapping` range of pages to ms
+ * copute interpretation of the recorded intended mappings, ms = [[mapping]]
  */
 void _interpret_mapping(struct maplets *ms, struct mapping *mapping, bool noisy)
 {
@@ -1158,66 +1182,65 @@ void _interpret_mapping(struct maplets *ms, struct mapping *mapping, bool noisy)
 /* ************************************************************************** 
  * ms := the interpretation of all the mappings recorded in `mappings` 
  */
-void interpret_mappings(struct maplets *ms, bool noisy)
+void interpret_mappings(struct maplets *ms, struct mappings *mappings, bool noisy)
 {
   u64 i;
   ms->count = 0;
-  for (i=0; i<HYP_MAPPING_KIND_NUMBER; i++) {
-    if (mappings[i].kind != HYP_NULL)
-      _interpret_mapping(ms, &mappings[i], noisy);
-  }
+  for (i=0; i < mappings->count; i++) 
+    _interpret_mapping(ms, &mappings->m[i], noisy);
 }
 
 
-bool interpret_equals(struct maplets *ms1, struct maplets *ms2)
-{
-  u64 i;
-  if (ms1->count != ms2->count) return false;
-  for (i=0; i<ms1->count; i++) {
-    if ( !(ms1->maplets[i].virt == ms2->maplets[i].virt && ms1->maplets[i].phys == ms2->maplets[i].phys) ) {
-      hyp_putsxn("interpret_equals mismatch virt1", ms1->maplets[i].virt, 64);
-      hyp_putsxn("virt2", ms2->maplets[i].virt, 64);
-      hyp_putc('\n');
-      return false;
-    }
-  }
-  return true;
-}
 
 
-static int mapping_compare(const void *lhs, const void *rhs)
-{
-  if (((const struct mapping *)lhs)->virt < ((const struct mapping *)rhs)->virt) return -1;
-  if (((const struct mapping *)lhs)->virt > ((const struct mapping *)rhs)->virt) return 1;
-  return 0;
-}
-
-
-void sort_mappings(void)
-{
-  sort(&mappings, HYP_MAPPING_KIND_NUMBER, sizeof(struct mapping), mapping_compare, NULL);
-}
 
 
 /* **************************************** */
-
-bool check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+// top-level check that the recorded intended mappings and the actual mappings at pgd are identical
+bool _check_hyp_mappings(struct mappings *mappings, struct maplets *maplets_a, struct maplets *maplets_b, kvm_pte_t *pgd, bool noisy) 
 {
   bool new_equal;
+
+  // the "old abstraction" check is much better for debugging the
+  // checking code, as one can more easily identify the source of any
+  // mismatches, while the "new abstraction" check will be easier to
+  // work with in the verification.  Do both.
   
-  // new abstraction
-  hyp_puts("sort_mappings");
-  sort_mappings();
+  // check directly, old abstraction
+  check_hyp_mappings_both(mappings, pgd, false && noisy);
+
+  // check using new abstraction
   hyp_puts("hyp_put_mappings");
-  hyp_put_mappings();
+  hyp_put_mappings(mappings);
   hyp_puts("interpret_mappings");
-  interpret_mappings(&maplets_a, noisy);
-  interpret_pgtable(&maplets_b, pgd, noisy);
-  new_equal = interpret_equals(&maplets_a, &maplets_b);
+  interpret_mappings(maplets_a, mappings, noisy);
+  hyp_puts("interpret_pgtable");
+  interpret_pgtable(maplets_b, pgd, noisy);
+  new_equal = interpret_equals(maplets_a, maplets_b);
   hyp_putsp("interpret_equals: "); hyp_putbool(new_equal); hyp_putc('\n');
-  
-  // old abstraction
-  _check_hyp_mappings(pgd, false && noisy);
 
   return new_equal;
 }
+
+ // apply the above to the global variables
+ bool check_hyp_mappings(kvm_pte_t *pgd, bool noisy) 
+ {
+   return _check_hyp_mappings(&mappings, &maplets_a, &maplets_b, pgd, noisy);
+ }
+ 
+ 
+/* **************************************** */
+ /* print key system register values */
+void dump_kvm_nvhe_init_params(struct kvm_nvhe_init_params *params)
+{
+        hyp_putsxn("mair_el2    ", params->mair_el2     , 64); hyp_putc('\n');
+        hyp_putsxn("tcr_el2     ", params->tcr_el2      , 64); hyp_putc('\n');
+        hyp_putsxn("tpidr_el2   ", params->tpidr_el2    , 64); hyp_putc('\n');
+        hyp_putsxn("stack_hyp_va", params->stack_hyp_va , 64); hyp_putc('\n');
+        hyp_putsxn("pgd_pa      ", (unsigned long)params->pgd_pa       , 64); hyp_putc('\n');
+        hyp_putsxn("hcr_el2     ", params->hcr_el2      , 64); hyp_putc('\n');
+        hyp_putsxn("vttbr       ", params->vttbr        , 64); hyp_putc('\n');
+        hyp_putsxn("vtcr        ", params->vtcr         , 64); hyp_putc('\n');
+}
+
+
