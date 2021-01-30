@@ -4,6 +4,24 @@
  * Author: Quentin Perret <qperret@google.com>
  */
 
+/* PS: relevant files:
+arch/arm64/kvm/hyp/nvhe/page_alloc.c  - this file
+
+arch/arm64/kvm/hyp/include/nvhe/gfp.h - defines struct hyp_pool, containing a lock and the per-order free lists of the buddy allocator, and the API of this file
+
+arch/arm64/kvm/hyp/include/nvhe/memory.h - defines struct hyp_page , global `struct hyp_page *hyp_vmemmap`, and the macros to convert between pointers to pages and virtual and physical addresses
+
+arch/arm64/kvm/hyp/nvhe/setup.c - initialises the allocator with
+
+	nr_pages = hyp_s1_pgtable_size() >> PAGE_SHIFT;
+	used_pages = hyp_early_alloc_nr_pages();
+	ret = hyp_pool_init(&hpool, __hyp_pa(hyp_pgt_base), nr_pages, used_pages);
+
+include/linux/list.h - doubly linked list macros
+
+notes24-2020-08-20-pkvm-alloc-walkthrough.txt
+*/
+
 #include <asm/kvm_hyp.h>
 #include <nvhe/gfp.h>
 
@@ -152,6 +170,11 @@ void *hyp_alloc_pages(struct hyp_pool *pool, gfp_t mask, unsigned int order)
 	return p ? hyp_page_to_virt(p) : NULL;
 }
 
+
+// PS: initialise the buddy allocator into `pool`, giving it memory phys..phys+ntr_pages<<PAGE_SHIFT, initialise all the corresponding vmemmap `struct hyp_page`s, and attach all of that after phys+used_pages<<PAGE_SHIFT to the free lists (which will presumably combine them as much as it can - is __hyp_attach_page commutative?)
+// PS: precondition: phys is page-aligned (NB not highest-order aligned)
+// PS: precondition: at the C semantics level, the "vmemmap is mapped" precondition is just ownership of the vmemmap array - but at a specific address that makes the arithmetic work
+
 /* hyp_vmemmap must be backed beforehand */
 int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 		  unsigned int nr_pages, unsigned int used_pages)
@@ -162,6 +185,7 @@ int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 	if (phys % PAGE_SIZE)
 		return -EINVAL;
 
+	// PS: initialise `pool`: the spinlock, the start and end to `phys` (surprising that this is a physical address?), and the per-order free lists to empty lists (pointing to themselves, see include/linux/list.h)
 	hyp_spin_lock_init(&pool->lock);
 	for (i = 0; i <= HYP_MAX_ORDER; i++)
 		INIT_LIST_HEAD(&pool->free_area[i]);
@@ -169,8 +193,10 @@ int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 	pool->range_end = phys + (nr_pages << PAGE_SHIFT);
 
 	/* Init the vmemmap portion */
+	// PS: zero all the `struct hyp_page`s in the vmemmap that correspond to the pages given to the allocator
 	p = hyp_phys_to_page(phys);
 	memset(p, 0, sizeof(*p) * nr_pages);
+	// PS: and for each of them, record that it belongs to this pool, and initialise its `struct list_head node` to an empty list (pointing to itself)
 	for (i = 0; i < nr_pages; i++, p++) {
 		p->pool = pool;
 		INIT_LIST_HEAD(&p->node);
