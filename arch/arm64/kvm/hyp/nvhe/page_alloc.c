@@ -16,12 +16,14 @@
 u64 __hyp_vmemmap;
 
 
-/* PS: casual googling reveals a paper with an Isabelle proof. I've not read it.
+/* PS: related work: casual googling reveals a paper with an Isabelle proof of some kind of buddy allocator. I've not read it.
 A Formally Verified Buddy Memory Allocation Model
 Ke Jiang; David Sanan; Yongwang Zhao; Shuanglong Kan; Yang Liu
 2019 24th International Conference on Engineering of Complex Computer Systems (ICECCS) https://ieeexplore.ieee.org/abstract/document/8882772
 */
 
+
+/* ****************************************************************** */
 /* PS: relevant files:
 
 - arch/arm64/kvm/hyp/nvhe/page_alloc.c  - this file, the buddy allocator implementation
@@ -47,10 +49,9 @@ Ke Jiang; David Sanan; Yongwang Zhao; Shuanglong Kan; Yang Liu
 - include/linux/types.h - the type "struct list_head"
 
 - notes24-2020-08-20-pkvm-alloc-walkthrough.txt - our previous chat about this with the pKVM devs
-*/
 
 
-/* PS: recalling the key types from those. In gfp.h:
+Recalling the key types from those, we have in gfp.h:
 
 struct hyp_pool {
 	hyp_spinlock_t lock;
@@ -72,29 +73,112 @@ struct hyp_page {
 */
 
 
-/* PS: morally, for any hyp_pool, when its lock is not taken:
-     say a "page group" is a subset of the page-aligned physical addresses from its range_start..range_end, that is contiguous and for which there exists an order in 0..HYP_MAX_ORDER such that it is 2^order pages in size and 2^order pages aligned (wrt absolute physical addresses).  (Maybe there's a better name than "page group"? Do people use "area" for this??)
-     there's a set of page groups that are currently handed out, each with a refcount >= 1. It's not clear whether there's not enough info in the concrete state to completely reconstruct this, as it doesn't say whether adjacent aligned pages were handed out together or separately. Do we need to record it for testing?
-__hyp_attach_page uses the order of its hyp_page argument - but what do we know about the orders of the other pages in that group?  Must all be HYP_NO_ORDER??
-     there's a set of page groups that are currently owned by the allocator, each with a refcount == 0.
-     together, those are all disjoint and partition the range_start..range_end
-     the set of elements of each free_area list of the hyp_pool is the subset of the page addresses (check which kind?) of the set of page groups currently owned by the allocator
-     these are consistent (not sure exactly how) with the the vmemmap hyp_page's with refcount == 0, which each contain their order
-     for each vmemmap hyp_page, the node member is its free-list node, if it's in one
-     the free_area lists have no repeated elements
-     the free_area's are maximally coalesced, i.e. for each non-maximal order, there don't exist any adjacent-in-memory suitably aligned pairs in the free set for that order
-     it owns all the vmemmap entries
-     all the vmemmap entries have this pool
+/* ****************************************************************** */
+/* PS: some abstration and invariant, informally
+
+   for any hyp_pool, when its lock is not taken:
+
+   say a "page group" is a subset of the page-aligned physical addresses from its range_start..range_end, that is contiguous and for which there exists an order in 0..HYP_MAX_ORDER such that it is 2^order pages in size and 2^order pages aligned (wrt absolute physical addresses).  (Maybe there's a better name than "page group"? Do people use "area" for this??)
+
+   the hyp_page "order" members partition all the pages into a set of page groups, starting at each page that isn't HYP_NO_ORDER
+
+   these page groups are partitioned into those that are currently handed out,
+ which have a refcount (in their first page) >= 1 and which do not appear in any free list, and those that have a refcount (in their first page) == 0 and which appear in the free list of their order
+
+   the allocator owns the latter
+
+   refcounts in non-first-pages of these page groups are presumably == 0 (?)
+
+   in the external spec, it's unclear whether or not we want to retain the page-group structure over the set of free pages.  But we certainly need it for the internal invariant, either explicitly or implicitly
+
+   the free list for each order contains exactly the set of page groups of that order with refcount == 0
+
+   free lists are represented as circular doubly linked lists, with `struct list_head` nodes that are either elements of the hyp_pool free_area array or hyp_page node members.  An empty list is one for which the free_area node has next and prev pointing to itself, and a hyp_page node member is "empty" in that sense iff it belongs to no free list.
+
+   the free page groups are maximally coalesced, i.e. for each non-maximal order, there don't exist any adjacent-in-memory suitably aligned pairs in the free page groups for that order
+
+   the allocator owns all the vmemmap entries
+
+   all the vmemmap entries have this pool
 */
+
+
+// PS: the following are to get debug printing via the uart
+#include <asm/kvm_mmu.h>
+#include <../debug-pl011.h>
+#include <../check-debug-pl011.h>
+
+
+/* ****************************************************************** */
+/* PS: start encoding into C. There's a lot of choice here, and we
+   have to pay unfortunately much attention to making it feasible to
+   compute; the following is a bit arbitrary, and not terribly nice -
+   it avoids painful computation of the "partitions the pages" part,
+   but is probably more algorithmic than we'd like */
+
+struct page_group {
+	phys_addr_t start;
+	unsigned int order;
+	bool free;
+};
+
+// horrible hack
+#define MAX_PAGE_GROUPS 0x1000
+
+struct page_groups {
+	struct page_group page_group[MAX_PAGE_GROUPS];
+	u64 count;
+};
+
+struct page_groups page_groups_a;
+
+void interpret(struct page_groups* pgs, struct hyp_pool *pool)
+{
+	phys_addr_t phys;
+	struct hyp_page *p;
+	struct hyp_page *pbody;
+
+	pgs->count = 0;
+	phys = pool->range_start;
+	while (phys < pool->range_end) {
+		p = hyp_phys_to_page(phys);
+		if (p->order == HYP_NO_ORDER) check_assert_fail("found HYP_NO_ORDER at next start page");
+		if (p->order > HYP_MAX_ORDER) check_assert_fail("found over-large order in start page");
+		if ((phys & GENMASK(p->order + PAGE_SHIFT - 1, 0)) != 0) check_assert_fail("found unaligned page group in start page");
+		if (p->refcount != 0 && !list_empty(&pbody->node)) check_assert_fail("found non-empty list in refcount!=0 start page");
+		pgs->page_group[pgs->count].start = phys;
+		pgs->page_group[pgs->count].order = p->order;
+		pgs->page_group[pgs->count].free = (p->refcount == 0);
+		hyp_putsxn("page group start",pgs->page_group[pgs->count].start,64);
+		hyp_putsxn("end",pgs->page_group[pgs->count].start + PAGE_SIZE*(1ul << pgs->page_group[pgs->count].order),64);
+		hyp_putsxn("order",pgs->page_group[pgs->count].order,32);
+		hyp_putsp("free "); hyp_putbool(pgs->page_group[pgs->count].free);
+		hyp_putsp("\n");
+		pgs->count++;
+		phys += PAGE_SIZE;
+		for (pbody=p+1; pbody < p+(1ul << (p->order)); pbody++) {
+			if (phys >= pool->range_end) check_assert_fail("ran over range_end in body");
+			if (pbody->order != HYP_NO_ORDER) check_assert_fail("found non-HYP_NO_ORDER in body");
+			if (pbody->refcount !=0) check_assert_fail("found non-zero refcount in body");
+			if (!list_empty(&pbody->node)) check_assert_fail("found non-empty list in body");
+			phys += PAGE_SIZE;
+		}
+	}
+}
+
+
+// running this, we see three initialisations of the allocator - why?
+// running this, we sometimes see check_assert_fail: found non-empty list in refcount!=0 start page
+
+
+/* ****************************************************************** */
+// PS: smoke test: check some trivial parts of the invariant
 
 /*PS: maybe we want to macroise with this kind of thing to make the math abstraction a bit more obvious, but I won't for now
 #define FORALL_HYP_PAGE(pool,phys,stmt) for (phys=pool->range_start; phys < pool->range_end; phys+= PAGE_SIZE) { stmt }
 */
 
-// PS: smoke test: check some trivial parts of the invariant
-#include <asm/kvm_mmu.h>
-#include <../debug-pl011.h>
-//#include <../check-debug-pl011.h>
+
 bool check_alloc_invariant(struct hyp_pool *pool) {
 	phys_addr_t phys;
 	struct hyp_page *p;
@@ -107,13 +191,21 @@ bool check_alloc_invariant(struct hyp_pool *pool) {
 			&& (p->order == HYP_NO_ORDER || p->order <= HYP_MAX_ORDER);
 			}
 	if (!ret)
-		hyp_puts("check_alloc_invariant failed");
+		hyp_putsp("check_alloc_invariant failed\n");
 	else
-		hyp_puts("check_alloc_invariant succeed");
+		hyp_putsp("check_alloc_invariant succeed\n");
 
+
+	interpret(&page_groups_a, pool);
+	
 	return ret;
 }
 
+
+
+/* ****************************************************************** */
+// PS: the following is the original code plus my comments plus a
+// smoke-test check of the check_alloc_invariant
 
 /*
  * Example buddy-tree for a 4-pages physically contiguous pool:
@@ -141,9 +233,9 @@ bool check_alloc_invariant(struct hyp_pool *pool) {
    otherwise return NULL */
 /* PS: this is a pure-ish function: no non-local writes */
 /* PS: I'm suspicious of the range_end check: it only checks the base
-   address of the buddy page group, not the end address. This will
+   address of the buddy page group, not the end address. Surely this will
    only be sound if the range that the pool is initialised with is
-   very aligned - I don't know whether that's enforced by the context*/
+   a nice power of two and suitably aligned, which is not the case. */
 static struct hyp_page *__find_buddy(struct hyp_pool *pool, struct hyp_page *p,
 				     unsigned int order)
 {
@@ -191,7 +283,7 @@ static void __hyp_attach_page(struct hyp_pool *pool,
 // PS: decrement it 
 // PS: if the recount becomes zero, __hyp_attach_page the page group
 // PS: all protected by the pool lock
-// PS: presumably there's already some standard seplogic idiom for ref-counted ownership?
+// PS: some standard seplogic idiom for ref-counted ownership?
 void hyp_put_page(void *addr)
 {
 	struct hyp_page *p = hyp_virt_to_page(addr);
@@ -206,7 +298,7 @@ void hyp_put_page(void *addr)
 	hyp_spin_unlock(&pool->lock);
 }
 
-// PS: bump the refcount for the page at hyp_virt addr
+// PS: just bump the refcount for the page at hyp_virt addr
 // PS: protected by the pool lock
 void hyp_get_page(void *addr)
 {
@@ -282,6 +374,10 @@ void *hyp_alloc_pages(struct hyp_pool *pool, gfp_t mask, unsigned int order)
 
 	hyp_spin_lock(&pool->lock);
 	p = __hyp_alloc_pages(pool, mask, order);
+
+	// PS: add check.  later we may need to make these sample, not be re-run on every call
+	check_alloc_invariant(pool);
+
 	hyp_spin_unlock(&pool->lock);
 
 	return p ? hyp_page_to_virt(p) : NULL;
@@ -298,6 +394,13 @@ int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 {
 	struct hyp_page *p;
 	int i;
+
+	// PS: add:
+	hyp_putsxn("hyp_pool_init phys",phys,64);
+	hyp_putsxn("hyp_pool_init phys'",phys+PAGE_SIZE*nr_pages,64);
+	hyp_putsxn(" nr_pages",nr_pages,32);
+	hyp_putsp("\n");
+
 
 	if (phys % PAGE_SIZE)
 		return -EINVAL;
