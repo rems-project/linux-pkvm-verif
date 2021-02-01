@@ -282,10 +282,13 @@ page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 free
    group, either before or after) if it exists within the pool range,
    otherwise return NULL */
 /* PS: this is a pure-ish function: no non-local writes */
-/* PS: I'm suspicious of the range_end check: it only checks the base
-   address of the buddy page group, not the end address. Surely this will
-   only be sound if the range that the pool is initialised with is
-   a nice power of two and suitably aligned, which is not the case. */
+/* PS: looking at this range_end check: it only checks the base
+   address of the buddy page group, not the end address. The range
+   that the pool is initialised with is a nice power of two and
+   suitably aligned, which is not the case in general. But the
+   __hyp_attach_page also checks that the order of the buddy is the
+   same as the order of the page its considering, which implies that
+   all of the buddy must have been allocated sometime*/
 static struct hyp_page *__find_buddy(struct hyp_pool *pool, struct hyp_page *p,
 				     unsigned int order)
 {
