@@ -132,39 +132,75 @@ struct page_groups {
 
 struct page_groups page_groups_a;
 
-void interpret(struct page_groups* pgs, struct hyp_pool *pool)
+
+void put_page_group(struct page_group *pg)
+{
+	hyp_putsxn("page group start",pg->start,64);
+	hyp_putsxn("end",pg->start + PAGE_SIZE*(1ul << pg->order),64);
+	hyp_putsxn("order",pg->order,32);
+	hyp_putsp("free "); hyp_putbool(pg->free);
+	hyp_putsp("\n");
+}
+
+bool check_page_group_start(phys_addr_t phys, struct hyp_page *p, struct hyp_pool *pool)
+{
+	bool ret;
+	ret = true;
+	if (p->order == HYP_NO_ORDER) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found HYP_NO_ORDER at next start page"); }
+	if (p->order > HYP_MAX_ORDER) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found over-large order in start page"); }
+	if ((phys & GENMASK(p->order + PAGE_SHIFT - 1, 0)) != 0) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found unaligned page group in start page"); }
+	if (p->refcount != 0 && !list_empty(&p->node)) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found non-empty list in refcount!=0 start page"); }
+	if (phys + PAGE_SIZE*(1ul << p->order) > pool->range_end) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("body runs over range_end"); }
+	return ret;
+}
+
+bool check_page_group_body(struct hyp_page *pbody)
+{
+	bool ret;
+	ret= true;
+	if (pbody->order != HYP_NO_ORDER) { ret=false; check_assert_fail("found non-HYP_NO_ORDER in body"); }
+	if (pbody->refcount !=0) { ret=false; check_assert_fail("found non-zero refcount in body"); }
+	if (!list_empty(&pbody->node)) { ret=false; check_assert_fail("found non-empty list in body"); }
+	return ret;
+}
+
+void add_page_group(struct page_groups *pgs, phys_addr_t phys, unsigned int order, bool free)
+{
+	struct page_group *pg;
+
+	pg = &pgs->page_group[pgs->count];
+	if (pgs->count >= MAX_PAGE_GROUPS) {check_assert_fail("overran MAX_PAGE_GROUPS"); return; }
+
+	pg->start = phys;
+	pg->order = order;
+	pg->free = free;
+
+	put_page_group(pg);
+
+	pgs->count++;
+}
+bool interpret(struct page_groups* pgs, struct hyp_pool *pool)
 {
 	phys_addr_t phys;
 	struct hyp_page *p;
 	struct hyp_page *pbody;
 
+	bool ret;
+	ret = true;
 	pgs->count = 0;
 	phys = pool->range_start;
 	while (phys < pool->range_end) {
 		p = hyp_phys_to_page(phys);
-		if (p->order == HYP_NO_ORDER) check_assert_fail("found HYP_NO_ORDER at next start page");
-		if (p->order > HYP_MAX_ORDER) check_assert_fail("found over-large order in start page");
-		if ((phys & GENMASK(p->order + PAGE_SHIFT - 1, 0)) != 0) check_assert_fail("found unaligned page group in start page");
-		if (p->refcount != 0 && !list_empty(&pbody->node)) check_assert_fail("found non-empty list in refcount!=0 start page");
-		pgs->page_group[pgs->count].start = phys;
-		pgs->page_group[pgs->count].order = p->order;
-		pgs->page_group[pgs->count].free = (p->refcount == 0);
-		hyp_putsxn("page group start",pgs->page_group[pgs->count].start,64);
-		hyp_putsxn("end",pgs->page_group[pgs->count].start + PAGE_SIZE*(1ul << pgs->page_group[pgs->count].order),64);
-		hyp_putsxn("order",pgs->page_group[pgs->count].order,32);
-		hyp_putsp("free "); hyp_putbool(pgs->page_group[pgs->count].free);
-		hyp_putsp("\n");
-		pgs->count++;
-		if (pgs->count >= MAX_PAGE_GROUPS) {pgs->count--; check_assert_fail("overran MAX_PAGE_GROUPS"); }
-		phys += PAGE_SIZE;
+
+		ret = ret && check_page_group_start(phys, p, pool);
+		add_page_group(pgs, phys, p->order, (p->refcount == 0));
+		phys += PAGE_SIZE*(1ul << p->order);
+
 		for (pbody=p+1; pbody < p+(1ul << (p->order)); pbody++) {
-			if (phys >= pool->range_end) check_assert_fail("ran over range_end in body");
-			if (pbody->order != HYP_NO_ORDER) check_assert_fail("found non-HYP_NO_ORDER in body");
-			if (pbody->refcount !=0) check_assert_fail("found non-zero refcount in body");
-			if (!list_empty(&pbody->node)) check_assert_fail("found non-empty list in body");
-			phys += PAGE_SIZE;
+			ret = ret && check_page_group_body(pbody);
 		}
 	}
+	return ret;
 }
 
 
@@ -191,13 +227,13 @@ bool check_alloc_invariant(struct hyp_pool *pool) {
 			&& (p->pool == pool)
 			&& (p->order == HYP_NO_ORDER || p->order <= HYP_MAX_ORDER);
 			}
+
+	ret = ret && interpret(&page_groups_a, pool);
+
 	if (!ret)
 		hyp_putsp("check_alloc_invariant failed\n");
 	else
 		hyp_putsp("check_alloc_invariant succeed\n");
-
-
-	interpret(&page_groups_a, pool);
 
 	return ret;
 }
@@ -429,6 +465,8 @@ void *hyp_alloc_pages(struct hyp_pool *pool, gfp_t mask, unsigned int order)
 	p = __hyp_alloc_pages(pool, mask, order);
 
 	// PS: add check.  later we may need to make these sample, not be re-run on every call
+	hyp_putsxn("__hyp_alloc_pages order",order,32);
+	hyp_putsxn(" returned p",(u64)p,64);
 	check_alloc_invariant(pool);
 
 	hyp_spin_unlock(&pool->lock);
@@ -450,8 +488,9 @@ int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 
 	// PS: add:
 	hyp_putsxn("hyp_pool_init phys",phys,64);
-	hyp_putsxn("hyp_pool_init phys'",phys+PAGE_SIZE*nr_pages,64);
-	hyp_putsxn(" nr_pages",nr_pages,32);
+	hyp_putsxn("phys'",phys+PAGE_SIZE*nr_pages,64);
+	hyp_putsxn("nr_pages",nr_pages,32);
+	hyp_putsxn("used_pages",used_pages,32);
 	hyp_putsp("\n");
 
 
