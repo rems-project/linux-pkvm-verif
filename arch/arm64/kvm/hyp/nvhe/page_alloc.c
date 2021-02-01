@@ -110,11 +110,11 @@ struct hyp_page {
 
 
 /* ****************************************************************** */
-/* PS: start encoding into C. There's a lot of choice here, and we
-   have to pay unfortunately much attention to making it feasible to
-   compute; the following is a bit arbitrary, and not terribly nice -
-   it avoids painful computation of the "partitions the pages" part,
-   but is probably more algorithmic than we'd like */
+/* PS: start encoding some of that into C. There's a lot of choice
+   here, and we have to pay unfortunately much attention to making it
+   feasible to compute; the following is a bit arbitrary, and not
+   terribly nice - it avoids painful computation of the "partitions
+   the pages" part, but is probably more algorithmic than we'd like */
 
 struct page_group {
 	phys_addr_t start;
@@ -155,6 +155,7 @@ void interpret(struct page_groups* pgs, struct hyp_pool *pool)
 		hyp_putsp("free "); hyp_putbool(pgs->page_group[pgs->count].free);
 		hyp_putsp("\n");
 		pgs->count++;
+		if (pgs->count >= MAX_PAGE_GROUPS) {pgs->count--; check_assert_fail("overran MAX_PAGE_GROUPS"); }
 		phys += PAGE_SIZE;
 		for (pbody=p+1; pbody < p+(1ul << (p->order)); pbody++) {
 			if (phys >= pool->range_end) check_assert_fail("ran over range_end in body");
@@ -197,10 +198,59 @@ bool check_alloc_invariant(struct hyp_pool *pool) {
 
 
 	interpret(&page_groups_a, pool);
-	
+
 	return ret;
 }
 
+
+/* ****************************************************************** */
+/* sample output
+hyp_pool_init phys:0x000000013e02f000 hyp_pool_init phys':0x000000013eab0000  nr_pages:0x00000a81 
+check_alloc_invariant succeed
+page group start:0x000000013e02f000 end:0x000000013e030000 order:0x00000000 free true
+page group start:0x000000013e030000 end:0x000000013e031000 order:0x00000000 free true
+page group start:0x000000013e031000 end:0x000000013e032000 order:0x00000000 free true
+page group start:0x000000013e032000 end:0x000000013e033000 order:0x00000000 free true
+page group start:0x000000013e033000 end:0x000000013e034000 order:0x00000000 free true
+page group start:0x000000013e034000 end:0x000000013e035000 order:0x00000000 free true
+page group start:0x000000013e035000 end:0x000000013e036000 order:0x00000000 free true
+page group start:0x000000013e036000 end:0x000000013e037000 order:0x00000000 free true
+page group start:0x000000013e037000 end:0x000000013e038000 order:0x00000000 free true
+page group start:0x000000013e038000 end:0x000000013e039000 order:0x00000000 free true
+page group start:0x000000013e039000 end:0x000000013e03a000 order:0x00000000 free true
+page group start:0x000000013e03a000 end:0x000000013e03b000 order:0x00000000 free true
+page group start:0x000000013e03b000 end:0x000000013e03c000 order:0x00000000 free true
+page group start:0x000000013e03c000 end:0x000000013e03d000 order:0x00000000 free true
+page group start:0x000000013e03d000 end:0x000000013e03e000 order:0x00000000 free true
+page group start:0x000000013e03e000 end:0x000000013e03f000 order:0x00000000 free true
+page group start:0x000000013e03f000 end:0x000000013e040000 order:0x00000000 free true
+page group start:0x000000013e040000 end:0x000000013e041000 order:0x00000000 free true
+page group start:0x000000013e041000 end:0x000000013e042000 order:0x00000000 free true
+page group start:0x000000013e042000 end:0x000000013e043000 order:0x00000000 free true
+page group start:0x000000013e043000 end:0x000000013e044000 order:0x00000000 free true
+page group start:0x000000013e044000 end:0x000000013e045000 order:0x00000000 free true
+page group start:0x000000013e045000 end:0x000000013e046000 order:0x00000000 free true
+page group start:0x000000013e046000 end:0x000000013e047000 order:0x00000000 free true
+page group start:0x000000013e047000 end:0x000000013e048000 order:0x00000000 free true
+page group start:0x000000013e048000 end:0x000000013e049000 order:0x00000000 free true
+page group start:0x000000013e049000 end:0x000000013e04a000 order:0x00000000 free true
+page group start:0x000000013e04a000 end:0x000000013e04b000 order:0x00000000 free true
+page group start:0x000000013e04b000 end:0x000000013e04c000 order:0x00000000 free true
+page group start:0x000000013e04c000 end:0x000000013e04d000 order:0x00000000 free true
+page group start:0x000000013e04d000 end:0x000000013e04e000 order:0x00000000 free true
+page group start:0x000000013e04e000 end:0x000000013e04f000 order:0x00000000 free true
+page group start:0x000000013e04f000 end:0x000000013e050000 order:0x00000000 free true
+page group start:0x000000013e050000 end:0x000000013e060000 order:0x00000004 free true
+page group start:0x000000013e060000 end:0x000000013e080000 order:0x00000005 free true
+page group start:0x000000013e080000 end:0x000000013e100000 order:0x00000007 free true
+page group start:0x000000013e100000 end:0x000000013e200000 order:0x00000008 free true
+page group start:0x000000013e200000 end:0x000000013e400000 order:0x00000009 free true
+page group start:0x000000013e400000 end:0x000000013e800000 order:0x0000000a free true
+page group start:0x000000013e800000 end:0x000000013ea00000 order:0x00000009 free true
+page group start:0x000000013ea00000 end:0x000000013ea80000 order:0x00000007 free true
+page group start:0x000000013ea80000 end:0x000000013eaa0000 order:0x00000005 free true
+page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 free true
+*/
 
 
 /* ****************************************************************** */
