@@ -15,6 +15,7 @@ struct hyp_pool {
 	struct list_head free_area[HYP_MAX_ORDER + 1];
 	phys_addr_t range_start;
 	phys_addr_t range_end;
+	unsigned int used_pages;  // PS HACK: add this to help state the invariant
 };
 
 /* GFP flags */

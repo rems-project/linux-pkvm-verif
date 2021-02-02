@@ -78,24 +78,45 @@ struct hyp_page {
 
    for any hyp_pool, when its lock is not taken:
 
-   say a "page group" is a subset of the page-aligned physical addresses from its range_start..range_end, that is contiguous and for which there exists an order in 0..HYP_MAX_ORDER such that it is 2^order pages in size and 2^order pages aligned (wrt absolute physical addresses).  (Maybe there's a better name than "page group"? Do people use "area" for this??)
+   say a "page group" is a subset of the page-aligned physical
+   addresses from its range_start..range_end, that is contiguous, and
+   for which there exists an order in 0..HYP_MAX_ORDER such that it is
+   2^order pages in size and 2^order pages aligned (wrt absolute
+   physical addresses).  (Maybe there's a better name than "page
+   group"?)
 
-   the hyp_page "order" members partition all the pages into a set of page groups, starting at each page that isn't HYP_NO_ORDER
+   the hyp_page "order" members partition all the pages of a pool into
+   a set of page groups, starting at each page that isn't HYP_NO_ORDER
 
-   these page groups are partitioned into those that are currently handed out,
- which have a refcount (in their first page) >= 1 and which do not appear in any free list, and those that have a refcount (in their first page) == 0 and which appear in the free list of their order
+   these page groups are partitioned into those that are currently
+   handed out, which either are in the used_pages or have a refcount
+   (in their first page) >= 1, and which do not appear in any free
+   list, and those that are not in the used_pages and have a refcount
+   (in their first page) == 0, which appear in the free list of their
+   order
 
    the allocator owns the latter
 
    refcounts in non-first-pages of these page groups are presumably == 0 (?)
 
-   in the external spec, it's unclear whether or not we want to retain the page-group structure over the set of free pages.  But we certainly need it for the internal invariant, either explicitly or implicitly
+   in the external spec, it's unclear whether or not we want to retain
+   the page-group structure over the set of free pages.  But we
+   certainly need it for the internal invariant, either explicitly or
+   implicitly
 
-   the free list for each order contains exactly the set of page groups of that order with refcount == 0
+   the free list for each order contains exactly the set of
+   non-used_page page groups of that order with refcount == 0
 
-   free lists are represented as circular doubly linked lists, with `struct list_head` nodes that are either elements of the hyp_pool free_area array or hyp_page node members.  An empty list is one for which the free_area node has next and prev pointing to itself, and a hyp_page node member is "empty" in that sense iff it belongs to no free list.
+   free lists are represented as circular doubly linked lists, with
+   `struct list_head` nodes that are either elements of the hyp_pool
+   free_area array or hyp_page node members.  An empty list is one for
+   which the free_area node has next and prev pointing to itself, and
+   a hyp_page node member is "empty" in that sense iff it belongs to
+   no free list.
 
-   the free page groups are maximally coalesced, i.e. for each non-maximal order, there don't exist any adjacent-in-memory suitably aligned pairs in the free page groups for that order
+   the free page groups are maximally coalesced, i.e. for each
+   non-maximal order, there don't exist any adjacent-in-memory
+   suitably aligned pairs in the free page groups for that order
 
    the allocator owns all the vmemmap entries
 
@@ -114,7 +135,15 @@ struct hyp_page {
    here, and we have to pay unfortunately much attention to making it
    feasible to compute; the following is a bit arbitrary, and not
    terribly nice - it avoids painful computation of the "partitions
-   the pages" part, but is probably more algorithmic than we'd like */
+   the pages" part, but is probably more algorithmic than we'd like,
+   esp. in the check_page_groups_and_interpret loop
+   structure. Although for refinement-type proof, we may want the
+   invariants to be as far as possible about the concrete data, rather
+   than about abstractions thereof.  So far the checking code below is
+   computing but not using the abstraction. */
+
+
+/* types of abstraction */
 
 struct page_group {
 	phys_addr_t start;
@@ -122,8 +151,8 @@ struct page_group {
 	bool free;
 };
 
-// horrible hack
-#define MAX_PAGE_GROUPS 0x1000
+
+#define MAX_PAGE_GROUPS 0x1000   /* horrible hack */
 
 struct page_groups {
 	struct page_group page_group[MAX_PAGE_GROUPS];
@@ -133,38 +162,127 @@ struct page_groups {
 struct page_groups page_groups_a;
 
 
-void put_page_group(struct page_group *pg)
+bool in_used_pages(phys_addr_t phys, struct hyp_pool *pool)
+{
+	return phys < pool->range_start + PAGE_SIZE*pool->used_pages;
+}
+
+
+/* pretty-printing */
+
+void put_page_group(struct page_group *pg, struct hyp_pool *pool)
 {
 	hyp_putsxn("page group start",pg->start,64);
 	hyp_putsxn("end",pg->start + PAGE_SIZE*(1ul << pg->order),64);
 	hyp_putsxn("order",pg->order,32);
-	hyp_putsp("free "); hyp_putbool(pg->free);
+	hyp_putsp("used_pages:"); hyp_putbool(in_used_pages(pg->start,pool));
+	hyp_putsp(" free:"); hyp_putbool(pg->free);
 	hyp_putsp("\n");
 }
 
+void put_free_list(struct list_head *head)
+{
+	struct list_head *pos;
+	list_for_each(pos,head) {
+		hyp_putsxn("",(u64)hyp_page_to_phys(list_entry(pos, struct hyp_page, node)),64);
+	}
+}
+
+void put_free_lists(struct hyp_pool *pool)
+{
+	u64 i;
+	for (i=0; i<HYP_MAX_ORDER+1; i++) {
+		hyp_putsxn("order",i,64);
+		put_free_list(&pool->free_area[i]);
+		hyp_putc('\n');
+	}
+}
+
+/* well-formed free list at specific order */
+bool check_free_list(struct list_head *head, unsigned int order, struct hyp_pool *pool)
+{
+	bool ret;
+	struct list_head *pos;
+	struct hyp_page *p;
+	phys_addr_t phys;
+	ret = true;
+	list_for_each(pos, head) { //for (pos = head->next; pos != (head); pos = pos->next) {
+		p = list_entry(pos, struct hyp_page, node);
+		phys = hyp_page_to_phys(p);
+		if (phys < pool->range_start + PAGE_SIZE*pool->used_pages || phys >= pool->range_end) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("free list entry not in pool unused_page range"); } // maybe this should check p is the address of a hyp_page node member, not just go straight to hyp_page_to_phys's notion of phys 
+		if (p->order != order) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("free list entry has wrong order"); }
+	}
+	return ret;
+}
+
+/* well-formed free lists of pool */
+bool check_free_lists(struct hyp_pool *pool)
+{
+	u64 i;
+	bool ret;
+	ret = true;
+	for (i=0; i<HYP_MAX_ORDER+1; i++) {
+		ret = ret && check_free_list(&pool->free_area[i], i, pool);
+	}
+	return ret;
+}
+
+
+/* list auxiliary: check whether @node is an element of @head (curiously not already in linux/include/list.h) */
+bool list_contains(struct list_head *node, struct list_head *head)
+{
+	struct list_head *pos;
+	list_for_each(pos, head) { //for (pos = head->next; pos != (head); pos = pos->next) {
+		if (pos==node)
+			return true;
+	}
+	return false;
+}
+
+/* well-formed page_group start page */
 bool check_page_group_start(phys_addr_t phys, struct hyp_page *p, struct hyp_pool *pool)
 {
 	bool ret;
 	ret = true;
+	if (p->pool != pool) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found wrong pool at next start page"); }
 	if (p->order == HYP_NO_ORDER) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found HYP_NO_ORDER at next start page"); }
 	if (p->order > HYP_MAX_ORDER) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found over-large order in start page"); }
 	if ((phys & GENMASK(p->order + PAGE_SHIFT - 1, 0)) != 0) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found unaligned page group in start page"); }
-	if (p->refcount != 0 && !list_empty(&p->node)) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found non-empty list in refcount!=0 start page"); }
 	if (phys + PAGE_SIZE*(1ul << p->order) > pool->range_end) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("body runs over range_end"); }
+	if (p->refcount != 0 || in_used_pages(phys,pool)) {
+		if (!list_empty(&p->node)) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found non-empty list in refcount!=0 or used_pages start page"); } }
+	else {
+		if (!list_contains(&p->node, &pool->free_area[p->order])) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("refcount==0 non-used_pages start page not in free list of its order"); } }
+
 	return ret;
 }
 
-bool check_page_group_body(struct hyp_page *pbody)
+/* well-formed page_group body page */
+bool check_page_group_body(struct hyp_page *pbody, struct hyp_pool *pool)
 {
 	bool ret;
 	ret= true;
+	if (pbody->pool != pool) { ret=false; check_assert_fail("found wrong pool in body"); }
 	if (pbody->order != HYP_NO_ORDER) { ret=false; check_assert_fail("found non-HYP_NO_ORDER in body"); }
 	if (pbody->refcount !=0) { ret=false; check_assert_fail("found non-zero refcount in body"); }
 	if (!list_empty(&pbody->node)) { ret=false; check_assert_fail("found non-empty list in body"); }
 	return ret;
 }
 
-void add_page_group(struct page_groups *pgs, phys_addr_t phys, unsigned int order, bool free)
+/* well-formed page_group */
+bool check_page_group(phys_addr_t phys, struct hyp_page *p, struct hyp_pool *pool)
+{
+	bool ret;
+	struct hyp_page *pbody;
+	ret = check_page_group_start(phys, p, pool);
+	for (pbody=p+1; pbody < p+(1ul << (p->order)); pbody++) {
+		ret = ret && check_page_group_body(pbody, pool);
+	}
+	return ret;
+}
+
+/* add page_group to abstraction */
+void add_page_group(struct page_groups *pgs, phys_addr_t phys, unsigned int order, bool free, struct hyp_pool *pool)
 {
 	struct page_group *pg;
 
@@ -175,15 +293,17 @@ void add_page_group(struct page_groups *pgs, phys_addr_t phys, unsigned int orde
 	pg->order = order;
 	pg->free = free;
 
-	put_page_group(pg);
+	put_page_group(pg, pool);
 
 	pgs->count++;
 }
-bool interpret(struct page_groups* pgs, struct hyp_pool *pool)
+
+/* check all page groups and compute abstraction */
+
+bool check_page_groups_and_interpret(struct page_groups* pgs, struct hyp_pool *pool)
 {
 	phys_addr_t phys;
 	struct hyp_page *p;
-	struct hyp_page *pbody;
 
 	bool ret;
 	ret = true;
@@ -191,44 +311,27 @@ bool interpret(struct page_groups* pgs, struct hyp_pool *pool)
 	phys = pool->range_start;
 	while (phys < pool->range_end) {
 		p = hyp_phys_to_page(phys);
-
-		ret = ret && check_page_group_start(phys, p, pool);
-		add_page_group(pgs, phys, p->order, (p->refcount == 0));
+		ret = ret && check_page_group(phys, p, pool);
+		add_page_group(pgs, phys, p->order, (p->refcount == 0), pool);
 		phys += PAGE_SIZE*(1ul << p->order);
-
-		for (pbody=p+1; pbody < p+(1ul << (p->order)); pbody++) {
-			ret = ret && check_page_group_body(pbody);
-		}
 	}
 	return ret;
 }
 
 
-// running this, we see three initialisations of the allocator - why?
-// running this, we sometimes see check_assert_fail: found non-empty list in refcount!=0 start page
+// running this, we see multiple initialisations of the allocator - why?
+
 
 
 /* ****************************************************************** */
-// PS: smoke test: check some trivial parts of the invariant
-
-/*PS: maybe we want to macroise with this kind of thing to make the math abstraction a bit more obvious, but I won't for now
-#define FORALL_HYP_PAGE(pool,phys,stmt) for (phys=pool->range_start; phys < pool->range_end; phys+= PAGE_SIZE) { stmt }
-*/
-
+// PS: smoke test: check the above invariant
 
 bool check_alloc_invariant(struct hyp_pool *pool) {
-	phys_addr_t phys;
-	struct hyp_page *p;
 	bool ret;
 	ret = true;
-	for (phys=pool->range_start; phys < pool->range_end; phys+= PAGE_SIZE) {
-		p = hyp_phys_to_page(phys);
-		ret = ret
-			&& (p->pool == pool)
-			&& (p->order == HYP_NO_ORDER || p->order <= HYP_MAX_ORDER);
-			}
-
-	ret = ret && interpret(&page_groups_a, pool);
+	ret = ret && check_page_groups_and_interpret(&page_groups_a, pool);
+	ret = ret && check_free_lists(pool);
+	put_free_lists(pool);
 
 	if (!ret)
 		hyp_putsp("check_alloc_invariant failed\n");
@@ -241,51 +344,63 @@ bool check_alloc_invariant(struct hyp_pool *pool) {
 
 /* ****************************************************************** */
 /* sample output
-hyp_pool_init phys:0x000000013e02f000 hyp_pool_init phys':0x000000013eab0000  nr_pages:0x00000a81 
+hyp_pool_init phys:0x000000013e02f000 phys':0x000000013eab0000 nr_pages:0x00000a81 used_pages:0x00000020 
+page group start:0x000000013e02f000 end:0x000000013e030000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e030000 end:0x000000013e031000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e031000 end:0x000000013e032000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e032000 end:0x000000013e033000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e033000 end:0x000000013e034000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e034000 end:0x000000013e035000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e035000 end:0x000000013e036000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e036000 end:0x000000013e037000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e037000 end:0x000000013e038000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e038000 end:0x000000013e039000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e039000 end:0x000000013e03a000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03a000 end:0x000000013e03b000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03b000 end:0x000000013e03c000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03c000 end:0x000000013e03d000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03d000 end:0x000000013e03e000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03e000 end:0x000000013e03f000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e03f000 end:0x000000013e040000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e040000 end:0x000000013e041000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e041000 end:0x000000013e042000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e042000 end:0x000000013e043000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e043000 end:0x000000013e044000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e044000 end:0x000000013e045000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e045000 end:0x000000013e046000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e046000 end:0x000000013e047000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e047000 end:0x000000013e048000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e048000 end:0x000000013e049000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e049000 end:0x000000013e04a000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04a000 end:0x000000013e04b000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04b000 end:0x000000013e04c000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04c000 end:0x000000013e04d000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04d000 end:0x000000013e04e000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04e000 end:0x000000013e04f000 order:0x00000000 used_pages:true free:true
+page group start:0x000000013e04f000 end:0x000000013e050000 order:0x00000000 used_pages:false free:true
+page group start:0x000000013e050000 end:0x000000013e060000 order:0x00000004 used_pages:false free:true
+page group start:0x000000013e060000 end:0x000000013e080000 order:0x00000005 used_pages:false free:true
+page group start:0x000000013e080000 end:0x000000013e100000 order:0x00000007 used_pages:false free:true
+page group start:0x000000013e100000 end:0x000000013e200000 order:0x00000008 used_pages:false free:true
+page group start:0x000000013e200000 end:0x000000013e400000 order:0x00000009 used_pages:false free:true
+page group start:0x000000013e400000 end:0x000000013e800000 order:0x0000000a used_pages:false free:true
+page group start:0x000000013e800000 end:0x000000013ea00000 order:0x00000009 used_pages:false free:true
+page group start:0x000000013ea00000 end:0x000000013ea80000 order:0x00000007 used_pages:false free:true
+page group start:0x000000013ea80000 end:0x000000013eaa0000 order:0x00000005 used_pages:false free:true
+page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 used_pages:false free:true
+order:0x0000000000000000 :0x000000013e04f000
+order:0x0000000000000001
+order:0x0000000000000002
+order:0x0000000000000003
+order:0x0000000000000004 :0x000000013e050000 :0x000000013eaa0000
+order:0x0000000000000005 :0x000000013e060000 :0x000000013ea80000
+order:0x0000000000000006
+order:0x0000000000000007 :0x000000013e080000 :0x000000013ea00000
+order:0x0000000000000008 :0x000000013e100000
+order:0x0000000000000009 :0x000000013e200000 :0x000000013e800000
+order:0x000000000000000a :0x000000013e400000
+order:0x000000000000000b
 check_alloc_invariant succeed
-page group start:0x000000013e02f000 end:0x000000013e030000 order:0x00000000 free true
-page group start:0x000000013e030000 end:0x000000013e031000 order:0x00000000 free true
-page group start:0x000000013e031000 end:0x000000013e032000 order:0x00000000 free true
-page group start:0x000000013e032000 end:0x000000013e033000 order:0x00000000 free true
-page group start:0x000000013e033000 end:0x000000013e034000 order:0x00000000 free true
-page group start:0x000000013e034000 end:0x000000013e035000 order:0x00000000 free true
-page group start:0x000000013e035000 end:0x000000013e036000 order:0x00000000 free true
-page group start:0x000000013e036000 end:0x000000013e037000 order:0x00000000 free true
-page group start:0x000000013e037000 end:0x000000013e038000 order:0x00000000 free true
-page group start:0x000000013e038000 end:0x000000013e039000 order:0x00000000 free true
-page group start:0x000000013e039000 end:0x000000013e03a000 order:0x00000000 free true
-page group start:0x000000013e03a000 end:0x000000013e03b000 order:0x00000000 free true
-page group start:0x000000013e03b000 end:0x000000013e03c000 order:0x00000000 free true
-page group start:0x000000013e03c000 end:0x000000013e03d000 order:0x00000000 free true
-page group start:0x000000013e03d000 end:0x000000013e03e000 order:0x00000000 free true
-page group start:0x000000013e03e000 end:0x000000013e03f000 order:0x00000000 free true
-page group start:0x000000013e03f000 end:0x000000013e040000 order:0x00000000 free true
-page group start:0x000000013e040000 end:0x000000013e041000 order:0x00000000 free true
-page group start:0x000000013e041000 end:0x000000013e042000 order:0x00000000 free true
-page group start:0x000000013e042000 end:0x000000013e043000 order:0x00000000 free true
-page group start:0x000000013e043000 end:0x000000013e044000 order:0x00000000 free true
-page group start:0x000000013e044000 end:0x000000013e045000 order:0x00000000 free true
-page group start:0x000000013e045000 end:0x000000013e046000 order:0x00000000 free true
-page group start:0x000000013e046000 end:0x000000013e047000 order:0x00000000 free true
-page group start:0x000000013e047000 end:0x000000013e048000 order:0x00000000 free true
-page group start:0x000000013e048000 end:0x000000013e049000 order:0x00000000 free true
-page group start:0x000000013e049000 end:0x000000013e04a000 order:0x00000000 free true
-page group start:0x000000013e04a000 end:0x000000013e04b000 order:0x00000000 free true
-page group start:0x000000013e04b000 end:0x000000013e04c000 order:0x00000000 free true
-page group start:0x000000013e04c000 end:0x000000013e04d000 order:0x00000000 free true
-page group start:0x000000013e04d000 end:0x000000013e04e000 order:0x00000000 free true
-page group start:0x000000013e04e000 end:0x000000013e04f000 order:0x00000000 free true
-page group start:0x000000013e04f000 end:0x000000013e050000 order:0x00000000 free true
-page group start:0x000000013e050000 end:0x000000013e060000 order:0x00000004 free true
-page group start:0x000000013e060000 end:0x000000013e080000 order:0x00000005 free true
-page group start:0x000000013e080000 end:0x000000013e100000 order:0x00000007 free true
-page group start:0x000000013e100000 end:0x000000013e200000 order:0x00000008 free true
-page group start:0x000000013e200000 end:0x000000013e400000 order:0x00000009 free true
-page group start:0x000000013e400000 end:0x000000013e800000 order:0x0000000a free true
-page group start:0x000000013e800000 end:0x000000013ea00000 order:0x00000009 free true
-page group start:0x000000013ea00000 end:0x000000013ea80000 order:0x00000007 free true
-page group start:0x000000013ea80000 end:0x000000013eaa0000 order:0x00000005 free true
-page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 free true
 */
 
 
@@ -315,7 +430,7 @@ page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 free
 
 /* PS: given the address p of a hyp_page in the vmemmap, and an order,
    return the address of the hyp_page of its buddy (the adjacent page
-   group, either before or after) if it exists within the pool range,
+   group, either before or after) if its start page is within the pool range,
    otherwise return NULL */
 /* PS: this is a pure-ish function: no non-local writes */
 /* PS: looking at this range_end check: it only checks the base
@@ -325,6 +440,9 @@ page group start:0x000000013eaa0000 end:0x000000013eab0000 order:0x00000004 free
    __hyp_attach_page also checks that the order of the buddy is the
    same as the order of the page its considering, which implies that
    all of the buddy must have been allocated sometime*/
+/* PS: for the range_start check, should that really be range_start+PAGE_SIZE*used_pages?
+   why is it ok as-is?  Because __hyp_attach_page also checks the buddy is in a free list, 
+   and the used_pages never are */
 static struct hyp_page *__find_buddy(struct hyp_pool *pool, struct hyp_page *p,
 				     unsigned int order)
 {
@@ -338,10 +456,8 @@ static struct hyp_page *__find_buddy(struct hyp_pool *pool, struct hyp_page *p,
 }
 
 
-/* PS: given a hyp_page p in the vmemmap, transfer that page group (at the order in that hyp_page) back to the allocator, coalescing buddy's as much as possible */
-/* PS: the list_empty(&buddy->node) check suggests a non-NULL buddy->node member is valid only if it doesn't satisfy this list_empty property?? how can that arise? */
-/* PS: coalescing the buddies doesn't zap the buddy->node */
-/* PS: not sure what the buddy->order != order check is doing */
+/* PS: given a hyp_page p in the vmemmap, transfer that page group (at the order in that hyp_page) back to the allocator, coalescing buddys as much as possible */
+/* PS: note that the buddy->order != order check ensures that the buddy page-group is the same order as the one we're trying to coalesce with it, and also ensures, if buddy->order==order, that all of the buddy must have been allocated sometime, and so be inside range_start..range_end */
 static void __hyp_attach_page(struct hyp_pool *pool,
 			      struct hyp_page *p)
 {
@@ -399,6 +515,8 @@ void hyp_get_page(void *addr)
 	hyp_spin_unlock(&pool->lock);
 }
 
+
+// PS: precondition: p is a free (probably non-used_page) page-group of order at least order 
 /* Extract a page from the buddy tree, at a specific order */
 static struct hyp_page *__hyp_extract_page(struct hyp_pool *pool,
 					   struct hyp_page *p,
@@ -503,6 +621,9 @@ int hyp_pool_init(struct hyp_pool *pool, phys_addr_t phys,
 		INIT_LIST_HEAD(&pool->free_area[i]);
 	pool->range_start = phys;
 	pool->range_end = phys + (nr_pages << PAGE_SHIFT);
+
+	// PS: add this to help state the invariant:
+	pool->used_pages = used_pages;
 
 	/* Init the vmemmap portion */
 	// PS: zero all the `struct hyp_page`s in the vmemmap that correspond to the pages given to the allocator
