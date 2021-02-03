@@ -76,6 +76,8 @@ struct hyp_page {
 /* ****************************************************************** */
 /* PS: some abstration and invariant, informally
 
+   LATER: maybe the following treatment of used_pages is wrong, and they should instead be treated just like any page that has non-zero refcount (even though they have zero refcount)?
+
    for any hyp_pool, when its lock is not taken:
 
    say a "page group" is a subset of the page-aligned physical
@@ -97,7 +99,7 @@ struct hyp_page {
 
    the allocator owns the latter
 
-   refcounts in non-first-pages of these page groups are presumably == 0 (?)
+   refcounts in non-first-pages of these page groups are presumably == 0
 
    in the external spec, it's unclear whether or not we want to retain
    the page-group structure over the set of free pages.  But we
@@ -107,7 +109,7 @@ struct hyp_page {
    the free list for each order contains exactly the set of
    non-used_page page groups of that order with refcount == 0
 
-   free lists are represented as circular doubly linked lists, with
+   free lists are represented as circular (??) doubly linked lists, with
    `struct list_head` nodes that are either elements of the hyp_pool
    free_area array or hyp_page node members.  An empty list is one for
    which the free_area node has next and prev pointing to itself, and
@@ -146,6 +148,8 @@ struct hyp_page {
    abstraction is probably useful in specs of the recursive functions
    of the implementation) */
 
+
+// RL: maybe we really want to maintain a forest of binary trees?
 
 /* types of abstraction */
 
@@ -529,6 +533,7 @@ void hyp_put_page(void *addr)
 
 // PS: just bump the refcount for the page at hyp_virt addr
 // PS: protected by the pool lock
+// PS: precondition: this page group must be currently handed out (and not in used_pages)
 void hyp_get_page(void *addr)
 {
 	struct hyp_page *p = hyp_virt_to_page(addr);
@@ -542,6 +547,7 @@ void hyp_get_page(void *addr)
 
 // PS: precondition: p is a free (probably non-used_page) page-group of order at least order 
 /* Extract a page from the buddy tree, at a specific order */
+// RL: isn't the first check dead code?
 static struct hyp_page *__hyp_extract_page(struct hyp_pool *pool,
 					   struct hyp_page *p,
 					   unsigned int order)
@@ -617,7 +623,7 @@ void *hyp_alloc_pages(struct hyp_pool *pool, gfp_t mask, unsigned int order)
 }
 
 
-// PS: initialise the buddy allocator into `pool`, giving it memory phys..phys+ntr_pages<<PAGE_SHIFT, initialise all the corresponding vmemmap `struct hyp_page`s, and attach all of that after phys+used_pages<<PAGE_SHIFT to the free lists (which will presumably combine them as much as it can - is __hyp_attach_page commutative?)
+// PS: initialise the buddy allocator into `pool`, giving it memory phys..phys+nr_pages<<PAGE_SHIFT, initialise all the corresponding vmemmap `struct hyp_page`s, and attach all of that after phys+used_pages<<PAGE_SHIFT to the free lists (which will presumably combine them as much as it can - is __hyp_attach_page commutative?)
 // PS: precondition: phys is page-aligned (NB not highest-order aligned)
 // PS: precondition: at the C semantics level, the "vmemmap is mapped" precondition is just ownership of the vmemmap array - but at a specific address that makes the arithmetic work
 
