@@ -140,7 +140,11 @@ struct hyp_page {
    structure. Although for refinement-type proof, we may want the
    invariants to be as far as possible about the concrete data, rather
    than about abstractions thereof.  So far the checking code below is
-   computing but not using the abstraction. */
+   computing but not using the abstraction.  Is the abstraction what
+   we want to use for the external spec of this module?  (This seems a
+   bit different to the pgtable case, where some elaboration of the
+   abstraction is probably useful in specs of the recursive functions
+   of the implementation) */
 
 
 /* types of abstraction */
@@ -239,6 +243,22 @@ bool list_contains(struct list_head *node, struct list_head *head)
 	return false;
 }
 
+
+struct hyp_page *find_free_buddy(struct hyp_page *p, unsigned int order, struct hyp_pool *pool)
+{
+        struct hyp_page *buddy;
+	// this duplicates __find_buddy :
+	phys_addr_t addr = hyp_page_to_phys(p);
+	addr ^= (PAGE_SIZE << order);
+	if (addr < pool->range_start || addr >= pool->range_end)
+		return NULL;
+	buddy = hyp_phys_to_page(addr);
+        // and this duplicates the check in __hyp_attach_page
+	if (list_empty(&buddy->node) || buddy->order != order)
+		return NULL;
+	return buddy;
+}
+
 /* well-formed page_group start page */
 bool check_page_group_start(phys_addr_t phys, struct hyp_page *p, struct hyp_pool *pool)
 {
@@ -252,7 +272,10 @@ bool check_page_group_start(phys_addr_t phys, struct hyp_page *p, struct hyp_poo
 	if (p->refcount != 0 || in_used_pages(phys,pool)) {
 		if (!list_empty(&p->node)) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found non-empty list in refcount!=0 or used_pages start page"); } }
 	else {
-		if (!list_contains(&p->node, &pool->free_area[p->order])) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("refcount==0 non-used_pages start page not in free list of its order"); } }
+		if (!list_contains(&p->node, &pool->free_area[p->order])) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("refcount==0 non-used_pages start page not in free list of its order"); }
+
+		if (find_free_buddy(p, p->order, pool) != NULL) { ret=false; hyp_putsxn("phys",(u64)phys,64); check_assert_fail("found free buddy"); }
+	}
 
 	return ret;
 }
@@ -458,6 +481,7 @@ static struct hyp_page *__find_buddy(struct hyp_pool *pool, struct hyp_page *p,
 
 /* PS: given a hyp_page p in the vmemmap, transfer that page group (at the order in that hyp_page) back to the allocator, coalescing buddys as much as possible */
 /* PS: note that the buddy->order != order check ensures that the buddy page-group is the same order as the one we're trying to coalesce with it, and also ensures, if buddy->order==order, that all of the buddy must have been allocated sometime, and so be inside range_start..range_end */
+/* PS: can __hyp_attach_page mistakenly coalesce with the last unused_page?  No, because the used_pages have empty free lists */
 static void __hyp_attach_page(struct hyp_pool *pool,
 			      struct hyp_page *p)
 {
@@ -483,9 +507,9 @@ static void __hyp_attach_page(struct hyp_pool *pool,
 
 
 // PS: hand a reference-count of a page-group back to the allocator
-// PS: ...actually transferring ownership it it's the last reference-count
+// PS: ...actually transferring ownership if it's the last reference-count
 // PS: precondition: the refcount for the page at hyp_virt addr is non-zero
-// PS: decrement it 
+// PS: decrement it
 // PS: if the recount becomes zero, __hyp_attach_page the page group
 // PS: all protected by the pool lock
 // PS: some standard seplogic idiom for ref-counted ownership?
